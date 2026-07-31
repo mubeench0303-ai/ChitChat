@@ -1,0 +1,28 @@
+# ==========================
+# Frontend
+# ==========================
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# Environment
+frontend/.env
+frontend/.env.local
+backend/.env
+
+# ==========================
+# Go
+# ==========================
+backend/bin/
+backend/tmp/
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
