@@ -1,0 +1,661 @@
+package handler
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/go-playground/validator/v10"
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+
+	"github.com/mubeench0303-ai/ChitChat/backend/internal/middleware"
+	"github.com/mubeench0303-ai/ChitChat/backend/internal/models"
+	"github.com/mubeench0303-ai/ChitChat/backend/internal/repository"
+	"github.com/mubeench0303-ai/ChitChat/backend/internal/service"
+)
+
+type AuthHandler struct {
+	auth      *service.AuthService
+	users     *repository.UserRepository
+	validator *validator.Validate
+}
+
+func NewAuthHandler(auth *service.AuthService, users *repository.UserRepository) *AuthHandler {
+	return &AuthHandler{
+		auth:      auth,
+		users:     users,
+		validator: validator.New(),
+	}
+}
+
+type SignupRequest struct {
+	FullName string `json:"full_name" validate:"required,min=2,max=255"`
+	Username string `json:"username" validate:"required,min=2,max=255"`
+	Email    string `json:"email" validate:"required,email"`
+	Password string `json:"password" validate:"required,min=8"`
+}
+
+type VerifyEmailRequest struct {
+	Email string `json:"email" validate:"required,email"`
+	Code  string `json:"code" validate:"required,len=6"`
+}
+
+type LoginRequest struct {
+	Email    string `json:"email" validate:"required,email"`
+	Password string `json:"password" validate:"required"`
+}
+
+type ResendVerificationRequest struct {
+	Email string `json:"email" validate:"required,email"`
+}
+
+type ForgotPasswordRequest struct {
+	Email string `json:"email" validate:"required,email"`
+}
+
+type ResetPasswordRequest struct {
+	Email       string `json:"email" validate:"required,email"`
+	Code        string `json:"code" validate:"required,len=6"`
+	NewPassword string `json:"new_password" validate:"required,min=8"`
+}
+
+type UpdateProfileRequest struct {
+	FullName string `json:"fullName"`
+	Username string `json:"username"`
+	Bio      string `json:"bio"`
+}
+
+type userResponse struct {
+	ID         string  `json:"id"`
+	Username   string  `json:"username"`
+	FullName   string  `json:"full_name"`
+	Email      string  `json:"email"`
+	IsVerified bool    `json:"isVerified"`
+	AvatarURL  *string `json:"avatarUrl,omitempty"`
+	CreatedAt  string  `json:"createdAt"`
+}
+
+type loginUserResponse struct {
+	ID         string  `json:"id"`
+	FullName   string  `json:"full_name"`
+	Username   string  `json:"username"`
+	Email      string  `json:"email"`
+	AvatarURL  *string `json:"avatar_url"`
+	IsVerified bool    `json:"is_verified"`
+}
+
+type meUserResponse struct {
+	ID         string  `json:"id"`
+	FullName   string  `json:"fullName"`
+	Username   string  `json:"username"`
+	Email      string  `json:"email"`
+	Bio        *string `json:"bio"`
+	AvatarURL  *string `json:"avatarUrl"`
+	IsOnline   bool    `json:"isOnline"`
+	LastSeen   *string `json:"lastSeen"`
+	IsVerified bool    `json:"isVerified"`
+	CreatedAt  string  `json:"createdAt"`
+	UpdatedAt  string  `json:"updatedAt"`
+}
+
+func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
+	var req SignupRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if err := h.validator.Struct(req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"message": "Validation failed",
+			"errors":  validationErrors(err),
+		})
+		return
+	}
+
+	user, err := h.auth.Signup(r.Context(), req.FullName, req.Username, req.Email, req.Password)
+	if errors.Is(err, service.ErrEmailAlreadyExists) || errors.Is(err, service.ErrUsernameAlreadyExists) {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to create account")
+		return
+	}
+
+	if user.VerificationResent {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"user":                 toUserResponse(user.User),
+			"message":              "A new verification code has been sent to your email.",
+			"verification_resent": true,
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"user":    toUserResponse(user.User),
+		"message": "Account created successfully.",
+	})
+}
+
+func (h *AuthHandler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
+	var req VerifyEmailRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if err := h.validator.Struct(req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"message": "Validation failed",
+			"errors":  validationErrors(err),
+		})
+		return
+	}
+
+	err := h.auth.VerifyEmail(r.Context(), req.Email, req.Code)
+	if errors.Is(err, service.ErrAlreadyVerified) {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrInvalidVerificationCode) || errors.Is(err, service.ErrExpiredVerificationCode) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to verify email")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"message": "Email verified successfully.",
+	})
+}
+
+func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
+	var req LoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if err := h.validator.Struct(req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"message": "Validation failed",
+			"errors":  validationErrors(err),
+		})
+		return
+	}
+
+	result, err := h.auth.Login(r.Context(), req.Email, req.Password)
+	if errors.Is(err, service.ErrInvalidCredentials) {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrEmailNotVerified) {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to log in")
+		return
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     middleware.AuthTokenCookieName,
+		Value:    result.Token,
+		Path:     "/",
+		MaxAge:   86400,
+		HttpOnly: true,
+		Secure:   false,
+		SameSite: http.SameSiteLaxMode,
+	})
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"message": "Login successful",
+		"user":    toLoginUserResponse(result.User),
+	})
+}
+
+func (h *AuthHandler) ResendVerification(w http.ResponseWriter, r *http.Request) {
+	var req ResendVerificationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if err := h.validator.Struct(req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"message": "Validation failed",
+			"errors":  validationErrors(err),
+		})
+		return
+	}
+
+	err := h.auth.ResendVerificationCode(r.Context(), req.Email)
+	if errors.Is(err, service.ErrUserNotFound) {
+		writeError(w, http.StatusNotFound, "User not found.")
+		return
+	}
+	if errors.Is(err, service.ErrAlreadyVerified) {
+		writeError(w, http.StatusConflict, "Email is already verified.")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Internal server error.")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"message": "A new verification code has been sent to your email.",
+	})
+}
+
+func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	user, err := h.users.GetUserByID(r.Context(), userID)
+	if errors.Is(err, repository.ErrNotFound) {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to fetch user profile")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, toMeUserResponse(user))
+}
+
+func (h *AuthHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
+	userIDStr, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	var req UpdateProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	user, err := h.auth.UpdateProfile(r.Context(), userID, req.FullName, req.Username, req.Bio)
+	if errors.Is(err, service.ErrUsernameAlreadyExists) {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrInvalidFullName) ||
+		errors.Is(err, service.ErrInvalidUsername) ||
+		errors.Is(err, service.ErrBioTooLong) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrUserNotFound) {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to update profile")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, toMeUserResponse(user))
+}
+
+func (h *AuthHandler) UpdateAvatar(w http.ResponseWriter, r *http.Request) {
+	userIDStr, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	if err := r.ParseMultipartForm(3 << 20); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid multipart form")
+		return
+	}
+
+	file, header, err := r.FormFile("avatar")
+	if err != nil {
+		if errors.Is(err, http.ErrMissingFile) {
+			writeError(w, http.StatusBadRequest, "Avatar file is required in the \"avatar\" field")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "Expected a file field named \"avatar\"")
+		return
+	}
+	defer file.Close()
+
+	user, err := h.auth.UpdateAvatar(r.Context(), userID, file, header.Filename)
+	if errors.Is(err, service.ErrInvalidAvatarFileSize) ||
+		errors.Is(err, service.ErrInvalidAvatarContentType) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrUserNotFound) {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to update avatar")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, toMeUserResponse(user))
+}
+
+func (h *AuthHandler) RemoveAvatar(w http.ResponseWriter, r *http.Request) {
+	userIDStr, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	user, err := h.auth.RemoveAvatar(r.Context(), userID)
+	if errors.Is(err, service.ErrNoAvatar) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrUserNotFound) {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to remove avatar")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, toMeUserResponse(user))
+}
+
+func (h *AuthHandler) SearchUsers(w http.ResponseWriter, r *http.Request) {
+	userIDStr, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	if query == "" {
+		writeError(w, http.StatusBadRequest, "Search query is required")
+		return
+	}
+
+	results, err := h.auth.SearchUsers(r.Context(), userID, query)
+	if errors.Is(err, service.ErrInvalidSearchQuery) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to search users")
+		return
+	}
+
+	if results == nil {
+		results = []models.UserSearchResult{}
+	}
+
+	writeJSON(w, http.StatusOK, results)
+}
+
+func (h *AuthHandler) GetPublicProfile(w http.ResponseWriter, r *http.Request) {
+	_, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	username := strings.TrimSpace(chi.URLParam(r, "username"))
+	if username == "" {
+		writeError(w, http.StatusBadRequest, "Username is required")
+		return
+	}
+
+	profile, err := h.auth.GetPublicProfile(r.Context(), username)
+	if errors.Is(err, service.ErrPublicProfileNotFound) {
+		writeError(w, http.StatusNotFound, "User not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to fetch profile")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, profile)
+}
+
+func (h *AuthHandler) CheckUsername(w http.ResponseWriter, r *http.Request) {
+	userIDStr, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	username := strings.TrimSpace(r.URL.Query().Get("username"))
+	if username == "" {
+		writeError(w, http.StatusBadRequest, "Username is required")
+		return
+	}
+
+	available, err := h.auth.CheckUsernameAvailability(r.Context(), userID, username)
+	if errors.Is(err, service.ErrInvalidUsername) {
+		writeJSON(w, http.StatusOK, map[string]bool{"available": false})
+		return
+	}
+	if errors.Is(err, service.ErrUserNotFound) {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to check username")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]bool{"available": available})
+}
+
+func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     middleware.AuthTokenCookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		Expires:  time.Unix(0, 0),
+		HttpOnly: true,
+		Secure:   false,
+		SameSite: http.SameSiteLaxMode,
+	})
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"message": "Logged out successfully.",
+	})
+}
+
+func (h *AuthHandler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
+	var req ForgotPasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if err := h.validator.Struct(req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"message": "Validation failed",
+			"errors":  validationErrors(err),
+		})
+		return
+	}
+
+	if err := h.auth.ForgotPassword(r.Context(), req.Email); err != nil {
+		writeError(w, http.StatusInternalServerError, "Internal server error.")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"message": "If the email exists, a password reset code has been sent.",
+	})
+}
+
+func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
+	var req ResetPasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if err := h.validator.Struct(req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"message": "Validation failed",
+			"errors":  validationErrors(err),
+		})
+		return
+	}
+
+	err := h.auth.ResetPassword(r.Context(), req.Email, req.Code, req.NewPassword)
+	if errors.Is(err, service.ErrInvalidVerificationCode) || errors.Is(err, service.ErrExpiredVerificationCode) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Internal server error.")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"message": "Password has been reset successfully.",
+	})
+}
+
+func toUserResponse(user *models.User) userResponse {
+	return userResponse{
+		ID:         user.ID,
+		Username:   user.Username,
+		FullName:   user.FullName,
+		Email:      user.Email,
+		IsVerified: user.IsVerified,
+		AvatarURL:  user.AvatarURL,
+		CreatedAt:  user.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+	}
+}
+
+func toLoginUserResponse(user *models.User) loginUserResponse {
+	return loginUserResponse{
+		ID:         user.ID,
+		FullName:   user.FullName,
+		Username:   user.Username,
+		Email:      user.Email,
+		AvatarURL:  user.AvatarURL,
+		IsVerified: user.IsVerified,
+	}
+}
+
+func toMeUserResponse(user *models.User) meUserResponse {
+	response := meUserResponse{
+		ID:         user.ID,
+		FullName:   user.FullName,
+		Username:   user.Username,
+		Email:      user.Email,
+		Bio:        user.Bio,
+		AvatarURL:  user.AvatarURL,
+		IsOnline:   user.IsOnline,
+		IsVerified: user.IsVerified,
+		CreatedAt:  user.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		UpdatedAt:  user.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+	}
+
+	if user.LastSeen != nil {
+		formatted := user.LastSeen.Format("2006-01-02T15:04:05Z07:00")
+		response.LastSeen = &formatted
+	}
+
+	return response
+}
+
+func validationErrors(err error) map[string]string {
+	fieldErrors := make(map[string]string)
+
+	var validationErrs validator.ValidationErrors
+	if !errors.As(err, &validationErrs) {
+		fieldErrors["request"] = "Invalid request"
+		return fieldErrors
+	}
+
+	for _, fieldErr := range validationErrs {
+		fieldErrors[validationFieldName(fieldErr.Field())] = validationMessage(fieldErr)
+	}
+
+	return fieldErrors
+}
+
+func validationFieldName(field string) string {
+	switch field {
+	case "FullName":
+		return "full_name"
+	case "NewPassword":
+		return "new_password"
+	default:
+		return strings.ToLower(field)
+	}
+}
+
+func validationMessage(fe validator.FieldError) string {
+	switch fe.Tag() {
+	case "required":
+		return "This field is required"
+	case "email":
+		return "Must be a valid email address"
+	case "min":
+		return "Value is too short"
+	case "max":
+		return "Value is too long"
+	default:
+		return "Invalid value"
+	}
+}
+
+func writeJSON(w http.ResponseWriter, status int, payload any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func writeError(w http.ResponseWriter, status int, message string) {
+	writeJSON(w, status, map[string]string{"message": message})
+}

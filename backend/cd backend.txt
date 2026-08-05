@@ -1,0 +1,25 @@
+cd backend
+go run ./cmd/api
+
+http://localhost:8080/health
+
+ "email":"john@example.com",
+  "password":"password123"
+
+  chrispresc.ot.t.47.136@gmail.com
+  chrispresc.ot.t.47.136@gmail.comA
+
+  
+  
+
+
+
+
+
+
+
+
+  
+
+
+  .\scripts\migrate.ps1 up
