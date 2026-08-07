@@ -55,6 +55,7 @@ func main() {
 	authService := service.NewAuthService(
 		pool,
 		userRepo,
+		conversationRepo,
 		verificationRepo,
 		mailer,
 		cloudinaryClient,

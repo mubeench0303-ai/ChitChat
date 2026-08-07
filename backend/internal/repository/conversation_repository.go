@@ -37,7 +37,7 @@ func directPairKey(userA, userB uuid.UUID) string {
 }
 
 const conversationSelectColumns = `
-	id, type, name, avatar_url, created_by, direct_pair_key, status, requested_by, created_at, updated_at`
+	id, type, name, avatar_url, created_by, direct_pair_key, status, requested_by, blocked_by, created_at, updated_at`
 
 func scanConversation(scanner interface {
 	Scan(dest ...any) error
@@ -51,6 +51,7 @@ func scanConversation(scanner interface {
 		&conversation.DirectPairKey,
 		&conversation.Status,
 		&conversation.RequestedBy,
+		&conversation.BlockedBy,
 		&conversation.CreatedAt,
 		&conversation.UpdatedAt,
 	)
@@ -87,6 +88,7 @@ func (r *ConversationRepository) FindBetweenUsers(
 		&conversation.DirectPairKey,
 		&conversation.Status,
 		&conversation.RequestedBy,
+		&conversation.BlockedBy,
 		&conversation.CreatedAt,
 		&conversation.UpdatedAt,
 	)
@@ -140,6 +142,7 @@ func (r *ConversationRepository) Create(
 		&conversation.DirectPairKey,
 		&conversation.Status,
 		&conversation.RequestedBy,
+		&conversation.BlockedBy,
 		&conversation.CreatedAt,
 		&conversation.UpdatedAt,
 	)
@@ -292,6 +295,7 @@ func (r *ConversationRepository) CreateGroup(
 		&conversation.DirectPairKey,
 		&conversation.Status,
 		&conversation.RequestedBy,
+		&conversation.BlockedBy,
 		&conversation.CreatedAt,
 		&conversation.UpdatedAt,
 	)
@@ -978,6 +982,188 @@ func (r *ConversationRepository) UpdateStatus(
 	return nil
 }
 
+func (r *ConversationRepository) BlockConversation(
+	ctx context.Context,
+	conversationID, blockedBy uuid.UUID,
+) error {
+	const query = `
+		UPDATE conversations
+		SET status = $2, blocked_by = $3, updated_at = NOW()
+		WHERE id = $1`
+
+	tag, err := r.db.Exec(
+		ctx,
+		query,
+		conversationID.String(),
+		models.ConversationStatusBlocked,
+		blockedBy.String(),
+	)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+
+	return nil
+}
+
+func (r *ConversationRepository) GetBlockedConversations(
+	ctx context.Context,
+	userID uuid.UUID,
+) ([]models.BlockedUser, error) {
+	const query = `
+		SELECT
+			c.id AS conversation_id,
+			u.full_name,
+			u.username,
+			u.avatar_url,
+			c.updated_at AS blocked_at
+		FROM conversations c
+		JOIN conversation_members cm_self
+			ON cm_self.conversation_id = c.id
+			AND cm_self.user_id = $1
+		JOIN conversation_members cm_other
+			ON cm_other.conversation_id = c.id
+			AND cm_other.user_id <> $1
+		JOIN users u ON u.id = cm_other.user_id
+		WHERE c.type = $2
+		  AND c.status = $3
+		  AND c.blocked_by = $1
+		ORDER BY c.updated_at DESC`
+
+	rows, err := r.db.Query(
+		ctx,
+		query,
+		userID.String(),
+		models.ConversationTypeDirect,
+		models.ConversationStatusBlocked,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	blocked := make([]models.BlockedUser, 0)
+	for rows.Next() {
+		var item models.BlockedUser
+		if err := rows.Scan(
+			&item.ConversationID,
+			&item.FullName,
+			&item.Username,
+			&item.AvatarURL,
+			&item.BlockedAt,
+		); err != nil {
+			return nil, err
+		}
+		blocked = append(blocked, item)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return blocked, nil
+}
+
+func (r *ConversationRepository) UnblockConversation(
+	ctx context.Context,
+	conversationID uuid.UUID,
+) error {
+	const query = `
+		UPDATE conversations
+		SET status = $2, blocked_by = NULL, updated_at = NOW()
+		WHERE id = $1
+		  AND status = $3`
+
+	tag, err := r.db.Exec(
+		ctx,
+		query,
+		conversationID.String(),
+		models.ConversationStatusAccepted,
+		models.ConversationStatusBlocked,
+	)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+
+	return nil
+}
+
+func (r *ConversationRepository) GetGroupsCreatedBy(
+	ctx context.Context,
+	userID uuid.UUID,
+) ([]uuid.UUID, error) {
+	const query = `
+		SELECT id
+		FROM conversations
+		WHERE type = $1
+		  AND created_by = $2`
+
+	rows, err := r.db.Query(
+		ctx,
+		query,
+		models.ConversationTypeGroup,
+		userID.String(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	conversationIDs := make([]uuid.UUID, 0)
+	for rows.Next() {
+		var conversationIDStr string
+
+		if err := rows.Scan(&conversationIDStr); err != nil {
+			return nil, err
+		}
+
+		conversationID, err := uuid.Parse(conversationIDStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid group conversation id: %w", err)
+		}
+
+		conversationIDs = append(conversationIDs, conversationID)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return conversationIDs, nil
+}
+
+func (r *ConversationRepository) TransferGroupOwnership(
+	ctx context.Context,
+	conversationID, newOwnerID uuid.UUID,
+) error {
+	const query = `
+		UPDATE conversations
+		SET created_by = $2, updated_at = NOW()
+		WHERE id = $1
+		  AND type = $3`
+
+	tag, err := r.db.Exec(
+		ctx,
+		query,
+		conversationID.String(),
+		newOwnerID.String(),
+		models.ConversationTypeGroup,
+	)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+
+	return nil
+}
+
 func (r *ConversationRepository) DeleteConversation(
 	ctx context.Context,
 	conversationID uuid.UUID,
@@ -1014,7 +1200,8 @@ func (r *ConversationRepository) ListConversations(
 			combined.latest_message_at,
 			combined.requested_at,
 			combined.requester_is_online,
-			combined.requester_last_seen
+			combined.requester_last_seen,
+			combined.unread_count
 		FROM (
 			SELECT
 				c.id AS conversation_id,
@@ -1030,7 +1217,26 @@ func (r *ConversationRepository) ListConversations(
 				COALESCE(latest.created_at, c.updated_at) AS latest_message_at,
 				c.updated_at AS requested_at,
 				u.is_online AS requester_is_online,
-				u.last_seen AS requester_last_seen
+				u.last_seen AS requester_last_seen,
+				(
+					SELECT COUNT(*)::int
+					FROM messages m
+					LEFT JOIN conversation_read_state crs
+						ON crs.conversation_id = c.id
+						AND crs.user_id = $1
+					WHERE m.conversation_id = c.id
+					  AND m.sender_id <> $1
+					  AND NOT EXISTS (
+						SELECT 1
+						FROM message_deletions md
+						WHERE md.message_id = m.id
+						  AND md.user_id = $1
+					  )
+					  AND (
+						crs.last_read_at IS NULL
+						OR m.created_at > crs.last_read_at
+					  )
+				) AS unread_count
 			FROM conversations c
 			JOIN conversation_members cm_self
 				ON cm_self.conversation_id = c.id
@@ -1065,7 +1271,26 @@ func (r *ConversationRepository) ListConversations(
 				COALESCE(latest.created_at, c.updated_at) AS latest_message_at,
 				c.updated_at AS requested_at,
 				false AS requester_is_online,
-				NULL::timestamptz AS requester_last_seen
+				NULL::timestamptz AS requester_last_seen,
+				(
+					SELECT COUNT(*)::int
+					FROM messages m
+					LEFT JOIN conversation_read_state crs
+						ON crs.conversation_id = c.id
+						AND crs.user_id = $1
+					WHERE m.conversation_id = c.id
+					  AND m.sender_id <> $1
+					  AND NOT EXISTS (
+						SELECT 1
+						FROM message_deletions md
+						WHERE md.message_id = m.id
+						  AND md.user_id = $1
+					  )
+					  AND (
+						crs.last_read_at IS NULL
+						OR m.created_at > crs.last_read_at
+					  )
+				) AS unread_count
 			FROM conversations c
 			JOIN conversation_members cm_self
 				ON cm_self.conversation_id = c.id
@@ -1113,6 +1338,7 @@ func (r *ConversationRepository) ListConversations(
 			&conversation.RequestedAt,
 			&conversation.RequesterIsOnline,
 			&conversation.RequesterLastSeen,
+			&conversation.UnreadCount,
 		); err != nil {
 			return nil, err
 		}
@@ -1307,7 +1533,7 @@ func (r *ConversationRepository) TouchConversation(
 	return nil
 }
 
-func (r *ConversationRepository) MarkMessageDelivered(
+func (r *ConversationRepository) MarkDirectMessageDelivered(
 	ctx context.Context,
 	messageID uuid.UUID,
 ) error {
@@ -1325,6 +1551,378 @@ func (r *ConversationRepository) MarkMessageDelivered(
 	}
 
 	return nil
+}
+
+func (r *ConversationRepository) MarkMessageDelivered(
+	ctx context.Context,
+	messageID, userID uuid.UUID,
+) error {
+	const query = `
+		INSERT INTO message_deliveries (message_id, user_id, delivered_at)
+		VALUES ($1, $2, NOW())
+		ON CONFLICT (message_id, user_id) DO NOTHING`
+
+	_, err := r.db.Exec(ctx, query, messageID.String(), userID.String())
+	return err
+}
+
+func (r *ConversationRepository) MarkMessagesDeliveredForUser(
+	ctx context.Context,
+	conversationID, userID uuid.UUID,
+) ([]uuid.UUID, error) {
+	const query = `
+		INSERT INTO message_deliveries (message_id, user_id, delivered_at)
+		SELECT m.id, $2, NOW()
+		FROM messages m
+		JOIN conversations c ON c.id = m.conversation_id
+		WHERE m.conversation_id = $1
+		  AND c.type = $3
+		  AND m.sender_id <> $2
+		ON CONFLICT (message_id, user_id) DO NOTHING
+		RETURNING message_id`
+
+	rows, err := r.db.Query(
+		ctx,
+		query,
+		conversationID.String(),
+		userID.String(),
+		models.ConversationTypeGroup,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	messageIDs := make([]uuid.UUID, 0)
+	for rows.Next() {
+		var messageIDStr string
+		if err := rows.Scan(&messageIDStr); err != nil {
+			return nil, err
+		}
+
+		messageID, err := uuid.Parse(messageIDStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid message id: %w", err)
+		}
+
+		messageIDs = append(messageIDs, messageID)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return messageIDs, nil
+}
+
+func (r *ConversationRepository) MarkMessagesReadForUser(
+	ctx context.Context,
+	conversationID, userID uuid.UUID,
+) ([]uuid.UUID, error) {
+	const query = `
+		INSERT INTO message_reads (message_id, user_id, read_at)
+		SELECT m.id, $2, NOW()
+		FROM messages m
+		JOIN conversations c ON c.id = m.conversation_id
+		WHERE m.conversation_id = $1
+		  AND c.type = $3
+		  AND m.sender_id <> $2
+		ON CONFLICT (message_id, user_id) DO NOTHING
+		RETURNING message_id`
+
+	rows, err := r.db.Query(
+		ctx,
+		query,
+		conversationID.String(),
+		userID.String(),
+		models.ConversationTypeGroup,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	messageIDs := make([]uuid.UUID, 0)
+	for rows.Next() {
+		var messageIDStr string
+		if err := rows.Scan(&messageIDStr); err != nil {
+			return nil, err
+		}
+
+		messageID, err := uuid.Parse(messageIDStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid message id: %w", err)
+		}
+
+		messageIDs = append(messageIDs, messageID)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return messageIDs, nil
+}
+
+func (r *ConversationRepository) GetGroupConversationIDsForUser(
+	ctx context.Context,
+	userID uuid.UUID,
+) ([]uuid.UUID, error) {
+	const query = `
+		SELECT c.id
+		FROM conversations c
+		JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = $1
+		WHERE c.type = $2`
+
+	rows, err := r.db.Query(ctx, query, userID.String(), models.ConversationTypeGroup)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	conversationIDs := make([]uuid.UUID, 0)
+	for rows.Next() {
+		var conversationIDStr string
+		if err := rows.Scan(&conversationIDStr); err != nil {
+			return nil, err
+		}
+
+		conversationID, err := uuid.Parse(conversationIDStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid conversation id: %w", err)
+		}
+
+		conversationIDs = append(conversationIDs, conversationID)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return conversationIDs, nil
+}
+
+type GroupMessageTickStatus struct {
+	MessageID uuid.UUID
+	SenderID  uuid.UUID
+	Status    string
+}
+
+func (r *ConversationRepository) GetGroupMessageTickStatuses(
+	ctx context.Context,
+	conversationID uuid.UUID,
+	messageIDs []uuid.UUID,
+) ([]GroupMessageTickStatus, error) {
+	if len(messageIDs) == 0 {
+		return nil, nil
+	}
+
+	idStrings := make([]string, len(messageIDs))
+	for i, id := range messageIDs {
+		idStrings[i] = id.String()
+	}
+
+	const query = `
+		WITH target_messages AS (
+			SELECT m.id, m.sender_id
+			FROM messages m
+			WHERE m.conversation_id = $1
+			  AND m.id = ANY($2::uuid[])
+		),
+		status_counts AS (
+			SELECT
+				tm.id AS message_id,
+				tm.sender_id,
+				(
+					SELECT COUNT(*)
+					FROM conversation_members cm
+					WHERE cm.conversation_id = $1
+					  AND cm.user_id <> tm.sender_id
+				) AS other_member_count,
+				(
+					SELECT COUNT(*)
+					FROM message_deliveries md
+					WHERE md.message_id = tm.id
+				) AS delivered_count,
+				(
+					SELECT COUNT(*)
+					FROM message_reads mr
+					WHERE mr.message_id = tm.id
+				) AS read_count
+			FROM target_messages tm
+		)
+		SELECT
+			message_id,
+			sender_id,
+			CASE
+				WHEN other_member_count = 0 THEN 'sent'
+				WHEN read_count >= other_member_count THEN 'seen'
+				WHEN delivered_count >= other_member_count THEN 'delivered'
+				ELSE 'sent'
+			END AS tick_status
+		FROM status_counts`
+
+	rows, err := r.db.Query(ctx, query, conversationID.String(), idStrings)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	results := make([]GroupMessageTickStatus, 0)
+	for rows.Next() {
+		var item GroupMessageTickStatus
+		var messageIDStr, senderIDStr string
+
+		if err := rows.Scan(&messageIDStr, &senderIDStr, &item.Status); err != nil {
+			return nil, err
+		}
+
+		item.MessageID, err = uuid.Parse(messageIDStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid message id: %w", err)
+		}
+
+		item.SenderID, err = uuid.Parse(senderIDStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid sender id: %w", err)
+		}
+
+		results = append(results, item)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return results, nil
+}
+
+func (r *ConversationRepository) GetMessageInfo(
+	ctx context.Context,
+	messageID uuid.UUID,
+) ([]models.MemberReadStatus, error) {
+	const query = `
+		SELECT
+			u.id,
+			u.full_name,
+			u.username,
+			u.avatar_url,
+			md.delivered_at,
+			mr.read_at,
+			CASE
+				WHEN mr.message_id IS NOT NULL THEN 'seen'
+				WHEN md.message_id IS NOT NULL THEN 'delivered'
+				ELSE 'not_delivered'
+			END AS member_status
+		FROM messages m
+		JOIN conversations c ON c.id = m.conversation_id
+		JOIN conversation_members cm
+			ON cm.conversation_id = m.conversation_id
+			AND cm.user_id <> m.sender_id
+		JOIN users u ON u.id = cm.user_id
+		LEFT JOIN message_reads mr
+			ON mr.message_id = m.id AND mr.user_id = cm.user_id
+		LEFT JOIN message_deliveries md
+			ON md.message_id = m.id AND md.user_id = cm.user_id
+		WHERE m.id = $1
+		  AND c.type = $2
+		ORDER BY u.full_name ASC`
+
+	rows, err := r.db.Query(ctx, query, messageID.String(), models.ConversationTypeGroup)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	members := make([]models.MemberReadStatus, 0)
+	for rows.Next() {
+		var member models.MemberReadStatus
+		var avatarURL *string
+
+		if err := rows.Scan(
+			&member.UserID,
+			&member.FullName,
+			&member.Username,
+			&avatarURL,
+			&member.DeliveredAt,
+			&member.ReadAt,
+			&member.Status,
+		); err != nil {
+			return nil, err
+		}
+
+		member.AvatarURL = avatarURL
+		members = append(members, member)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return members, nil
+}
+
+func (r *ConversationRepository) GetDirectMessageInfo(
+	ctx context.Context,
+	messageID uuid.UUID,
+) (*models.MemberReadStatus, error) {
+	const query = `
+		SELECT
+			u.id,
+			u.full_name,
+			u.username,
+			u.avatar_url,
+			m.delivered_at,
+			CASE
+				WHEN crs.last_read_at IS NOT NULL AND crs.last_read_at >= m.created_at
+					THEN crs.last_read_at
+				ELSE NULL
+			END AS read_at,
+			CASE
+				WHEN crs.last_read_at IS NOT NULL AND crs.last_read_at >= m.created_at THEN 'seen'
+				WHEN m.delivered_at IS NOT NULL THEN 'delivered'
+				ELSE 'not_delivered'
+			END AS member_status
+		FROM messages m
+		JOIN conversations c ON c.id = m.conversation_id
+		JOIN conversation_members cm
+			ON cm.conversation_id = m.conversation_id
+			AND cm.user_id <> m.sender_id
+		JOIN users u ON u.id = cm.user_id
+		LEFT JOIN conversation_read_state crs
+			ON crs.conversation_id = m.conversation_id
+			AND crs.user_id = cm.user_id
+		WHERE m.id = $1
+		  AND c.type = $2
+		LIMIT 1`
+
+	var member models.MemberReadStatus
+	var avatarURL *string
+
+	err := r.db.QueryRow(
+		ctx,
+		query,
+		messageID.String(),
+		models.ConversationTypeDirect,
+	).Scan(
+		&member.UserID,
+		&member.FullName,
+		&member.Username,
+		&avatarURL,
+		&member.DeliveredAt,
+		&member.ReadAt,
+		&member.Status,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	member.AvatarURL = avatarURL
+
+	return &member, nil
 }
 
 func (r *ConversationRepository) UpsertReadState(
@@ -1386,10 +1984,8 @@ func (r *ConversationRepository) MarkUndeliveredMessagesForRecipient(
 		WHERE m.conversation_id = c.id
 		  AND m.delivered_at IS NULL
 		  AND m.sender_id <> $1
-		  AND (
-			(c.type = $2 AND c.status = $3)
-			OR c.type = $4
-		  )
+		  AND c.type = $2
+		  AND c.status = $3
 		RETURNING m.id, m.conversation_id, m.sender_id`
 
 	rows, err := r.db.Query(
@@ -1398,7 +1994,6 @@ func (r *ConversationRepository) MarkUndeliveredMessagesForRecipient(
 		recipientID.String(),
 		models.ConversationTypeDirect,
 		models.ConversationStatusAccepted,
-		models.ConversationTypeGroup,
 	)
 	if err != nil {
 		return nil, err

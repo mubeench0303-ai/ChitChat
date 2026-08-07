@@ -2,6 +2,8 @@ package models
 
 import "time"
 
+const DeletedUserDisplayName = "Deleted User"
+
 type User struct {
 	ID           string     `json:"id"`
 	Username     string     `json:"username"`
@@ -13,6 +15,8 @@ type User struct {
 	Bio          *string    `json:"bio,omitempty"`
 	IsOnline     bool       `json:"isOnline"`
 	LastSeen     *time.Time `json:"lastSeen,omitempty"`
+	IsDeleted    bool       `json:"isDeleted"`
+	DeletedAt    *time.Time `json:"deletedAt,omitempty"`
 	CreatedAt    time.Time  `json:"createdAt"`
 	UpdatedAt    time.Time  `json:"updatedAt"`
 }

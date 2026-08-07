@@ -44,8 +44,10 @@ var (
 	ErrConversationNotFound   = errors.New("conversation not found")
 	ErrNotAuthorizedToRespond = errors.New("not authorized to respond to this request")
 	ErrNotAuthorized          = errors.New("not authorized")
+	ErrNotBlockInitiator      = errors.New("not authorized to unblock this user")
 	ErrConversationNotAccepted = errors.New("conversation is not accepted")
 	ErrMessageNotFound         = errors.New("message not found")
+	ErrNotMessageSender        = errors.New("not your message")
 	ErrEditWindowExpired       = errors.New("edit window expired")
 	ErrUnsendWindowExpired     = errors.New("unsend window expired")
 	ErrInvalidReplyTarget      = errors.New("reply target not in this conversation")
@@ -61,6 +63,7 @@ var (
 	ErrGroupAddMembersRequired = errors.New("at least one member id is required")
 	ErrUseLeaveGroupInstead     = errors.New("use leave group to remove yourself")
 	ErrWouldLeaveZeroAdmins     = errors.New("group must have at least one admin")
+	ErrRecipientNoLongerExists  = errors.New("recipient no longer exists")
 )
 
 var allowedReactionEmojis = map[string]struct{}{
@@ -107,6 +110,10 @@ func (s *ConversationService) SendMessageRequest(
 	}
 	if err != nil {
 		return nil, fmt.Errorf("conversation: failed to look up target user: %w", err)
+	}
+
+	if targetUser.IsDeleted {
+		return nil, ErrPublicProfileNotFound
 	}
 
 	targetID, err := uuid.Parse(targetUser.ID)
@@ -271,7 +278,7 @@ func (s *ConversationService) BlockRequest(
 		return ErrNotAuthorizedToRespond
 	}
 
-	if err := s.conversations.UpdateStatus(ctx, conversationID, models.ConversationStatusBlocked); err != nil {
+	if err := s.conversations.BlockConversation(ctx, conversationID, userID); err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return ErrConversationNotFound
 		}
@@ -377,11 +384,53 @@ func (s *ConversationService) BlockConnection(
 		return ErrNotAuthorized
 	}
 
-	if err := s.conversations.UpdateStatus(ctx, conversationID, models.ConversationStatusBlocked); err != nil {
+	if err := s.conversations.BlockConversation(ctx, conversationID, userID); err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return ErrConversationNotFound
 		}
 		return fmt.Errorf("conversation: failed to block connection: %w", err)
+	}
+
+	return nil
+}
+
+func (s *ConversationService) GetBlockedUsers(
+	ctx context.Context,
+	userID uuid.UUID,
+) ([]models.BlockedUser, error) {
+	blocked, err := s.conversations.GetBlockedConversations(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("conversation: failed to list blocked users: %w", err)
+	}
+
+	return blocked, nil
+}
+
+func (s *ConversationService) UnblockUser(
+	ctx context.Context,
+	actingUserID, conversationID uuid.UUID,
+) error {
+	conversation, err := s.conversations.GetByID(ctx, conversationID)
+	if errors.Is(err, repository.ErrNotFound) {
+		return ErrConversationNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("conversation: failed to fetch conversation: %w", err)
+	}
+
+	if conversationStatus(conversation) != models.ConversationStatusBlocked {
+		return ErrConversationNotFound
+	}
+
+	if conversation.BlockedBy == nil || *conversation.BlockedBy != actingUserID.String() {
+		return ErrNotBlockInitiator
+	}
+
+	if err := s.conversations.UnblockConversation(ctx, conversationID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return ErrConversationNotFound
+		}
+		return fmt.Errorf("conversation: failed to unblock user: %w", err)
 	}
 
 	return nil
@@ -431,9 +480,51 @@ func (s *ConversationService) GetMessages(
 		return nil, fmt.Errorf("conversation: failed to list messages: %w", err)
 	}
 
+	if conversation.Type == models.ConversationTypeGroup {
+		messageIDs := make([]uuid.UUID, 0, len(messages))
+		for i := range messages {
+			scrubMessage(&messages[i])
+			if messages[i].SenderID == userID.String() {
+				messageUUID, parseErr := uuid.Parse(messages[i].ID)
+				if parseErr != nil {
+					return nil, fmt.Errorf("conversation: invalid message id: %w", parseErr)
+				}
+				messageIDs = append(messageIDs, messageUUID)
+			}
+		}
+
+		if len(messageIDs) > 0 {
+			tickStatuses, tickErr := s.conversations.GetGroupMessageTickStatuses(
+				ctx,
+				conversationID,
+				messageIDs,
+			)
+			if tickErr != nil {
+				return nil, fmt.Errorf("conversation: failed to get group tick statuses: %w", tickErr)
+			}
+
+			tickByMessageID := make(map[string]string, len(tickStatuses))
+			for _, item := range tickStatuses {
+				tickByMessageID[item.MessageID.String()] = item.Status
+			}
+
+			for i := range messages {
+				if messages[i].SenderID != userID.String() {
+					continue
+				}
+				if status, ok := tickByMessageID[messages[i].ID]; ok {
+					messages[i].TickStatus = &status
+				} else {
+					sent := "sent"
+					messages[i].TickStatus = &sent
+				}
+			}
+		}
+
+		return messages, nil
+	}
+
 	var otherLastRead *time.Time
-	// TODO(groups): "seen" status for groups needs a product decision — for now
-	// only direct chats derive seen/delivered ticks from another participant's read state.
 	if conversation.Type == models.ConversationTypeDirect {
 		otherLastRead, err = s.conversations.GetReadState(ctx, conversationID, userID)
 		if err != nil {
@@ -462,8 +553,29 @@ func (s *ConversationService) MarkConversationRead(
 		return ErrNotAuthorized
 	}
 
+	conversation, err := s.conversations.GetByID(ctx, conversationID)
+	if errors.Is(err, repository.ErrNotFound) {
+		return ErrConversationNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("conversation: failed to fetch conversation: %w", err)
+	}
+
 	if err := s.conversations.UpsertReadState(ctx, conversationID, userID); err != nil {
 		return fmt.Errorf("conversation: failed to update read state: %w", err)
+	}
+
+	if conversation.Type == models.ConversationTypeGroup {
+		affectedMessageIDs, err := s.conversations.MarkMessagesReadForUser(
+			ctx,
+			conversationID,
+			userID,
+		)
+		if err != nil {
+			return fmt.Errorf("conversation: failed to mark group messages read: %w", err)
+		}
+
+		s.pushGroupTickUpdates(ctx, conversationID, affectedMessageIDs)
 	}
 
 	if s.notifications != nil {
@@ -729,6 +841,23 @@ func (s *ConversationService) SendChatMessage(
 		if conversation.Status == nil || *conversation.Status != models.ConversationStatusAccepted {
 			return nil, ErrConversationNotAccepted
 		}
+
+		otherUserID, err := s.conversations.GetOtherParticipantID(ctx, conversationID, userID)
+		if err != nil {
+			return nil, fmt.Errorf("conversation: failed to resolve other participant: %w", err)
+		}
+
+		otherUser, err := s.users.GetUserByID(ctx, otherUserID.String())
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, ErrRecipientNoLongerExists
+		}
+		if err != nil {
+			return nil, fmt.Errorf("conversation: failed to load other participant: %w", err)
+		}
+
+		if otherUser.IsDeleted {
+			return nil, ErrRecipientNoLongerExists
+		}
 	}
 
 	trimmedContent := strings.TrimSpace(content)
@@ -831,27 +960,58 @@ func (s *ConversationService) SendChatMessage(
 				log.Printf("conversation: failed to notify message recipients: %v", err)
 			}
 
-			deliveredMarked := false
-			for _, recipientID := range recipientIDs {
-				// TODO(groups): delivery semantics for groups — currently marks delivered
-				// once any online recipient receives the push, same single delivered_at column.
-				if !deliveredMarked && s.notifications.IsUserOnline(recipientID) {
-					messageUUID, parseErr := uuid.Parse(message.ID)
-					if parseErr != nil {
-						log.Printf("conversation: invalid message id for delivery mark: %v", parseErr)
-					} else if err := s.conversations.MarkMessageDelivered(ctx, messageUUID); err != nil {
-						log.Printf("conversation: failed to mark message delivered: %v", err)
-					} else {
-						now := time.Now()
-						message.DeliveredAt = &now
-						deliveredMarked = true
+			messageUUID, parseErr := uuid.Parse(message.ID)
+			if parseErr != nil {
+				log.Printf("conversation: invalid message id for delivery mark: %v", parseErr)
+			} else if conversation.Type == models.ConversationTypeGroup {
+				for _, recipientID := range recipientIDs {
+					if !s.notifications.IsUserOnline(recipientID) {
+						continue
+					}
+					if err := s.conversations.MarkMessageDelivered(ctx, messageUUID, recipientID); err != nil {
+						log.Printf("conversation: failed to mark group message delivered for user %s: %v", recipientID, err)
+					}
+				}
+				s.pushGroupTickUpdates(ctx, conversationID, []uuid.UUID{messageUUID})
+			} else {
+				deliveredMarked := false
+				for _, recipientID := range recipientIDs {
+					if !deliveredMarked && s.notifications.IsUserOnline(recipientID) {
+						if err := s.conversations.MarkDirectMessageDelivered(ctx, messageUUID); err != nil {
+							log.Printf("conversation: failed to mark message delivered: %v", err)
+						} else {
+							now := time.Now()
+							message.DeliveredAt = &now
+							deliveredMarked = true
+						}
 					}
 				}
 			}
 		}
 	}
 
-	applyMessageStatus(message, nil, userID.String())
+	if conversation.Type == models.ConversationTypeGroup {
+		messageUUID, parseErr := uuid.Parse(message.ID)
+		if parseErr != nil {
+			sent := "sent"
+			message.TickStatus = &sent
+		} else {
+			tickStatuses, tickErr := s.conversations.GetGroupMessageTickStatuses(
+				ctx,
+				conversationID,
+				[]uuid.UUID{messageUUID},
+			)
+			if tickErr != nil || len(tickStatuses) == 0 {
+				sent := "sent"
+				message.TickStatus = &sent
+			} else {
+				status := tickStatuses[0].Status
+				message.TickStatus = &status
+			}
+		}
+	} else {
+		applyMessageStatus(message, nil, userID.String())
+	}
 
 	return message, nil
 }
@@ -865,25 +1025,41 @@ func (s *ConversationService) DeliverPendingMessages(
 		return fmt.Errorf("conversation: failed to mark pending deliveries: %w", err)
 	}
 
-	if s.notifications == nil || len(notices) == 0 {
-		return nil
+	if s.notifications != nil && len(notices) > 0 {
+		for _, notice := range notices {
+			senderID, err := uuid.Parse(notice.SenderID)
+			if err != nil {
+				log.Printf("conversation: invalid sender id on delivery notice: %v", err)
+				continue
+			}
+
+			payload := map[string]interface{}{
+				"conversationId": notice.ConversationID,
+				"messageId":      notice.MessageID,
+			}
+
+			if err := s.notifications.NotifyUsers([]uuid.UUID{senderID}, "message_delivered", payload); err != nil {
+				log.Printf("conversation: failed to notify sender %s of delivery: %v", senderID, err)
+			}
+		}
 	}
 
-	for _, notice := range notices {
-		senderID, err := uuid.Parse(notice.SenderID)
-		if err != nil {
-			log.Printf("conversation: invalid sender id on delivery notice: %v", err)
-			continue
+	groupConversationIDs, err := s.conversations.GetGroupConversationIDsForUser(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("conversation: failed to list group conversations: %w", err)
+	}
+
+	for _, conversationID := range groupConversationIDs {
+		affectedMessageIDs, markErr := s.conversations.MarkMessagesDeliveredForUser(
+			ctx,
+			conversationID,
+			userID,
+		)
+		if markErr != nil {
+			return fmt.Errorf("conversation: failed to mark group messages delivered: %w", markErr)
 		}
 
-		payload := map[string]interface{}{
-			"conversationId": notice.ConversationID,
-			"messageId":      notice.MessageID,
-		}
-
-		if err := s.notifications.NotifyUsers([]uuid.UUID{senderID}, "message_delivered", payload); err != nil {
-			log.Printf("conversation: failed to notify sender %s of delivery: %v", senderID, err)
-		}
+		s.pushGroupTickUpdates(ctx, conversationID, affectedMessageIDs)
 	}
 
 	return nil
@@ -930,6 +1106,91 @@ func (s *ConversationService) notifyOtherMembers(
 	}
 }
 
+func (s *ConversationService) pushGroupTickUpdates(
+	ctx context.Context,
+	conversationID uuid.UUID,
+	messageIDs []uuid.UUID,
+) {
+	if s.notifications == nil || len(messageIDs) == 0 {
+		return
+	}
+
+	tickStatuses, err := s.conversations.GetGroupMessageTickStatuses(
+		ctx,
+		conversationID,
+		messageIDs,
+	)
+	if err != nil {
+		log.Printf("conversation: failed to compute group tick statuses: %v", err)
+		return
+	}
+
+	for _, item := range tickStatuses {
+		payload := map[string]interface{}{
+			"conversationId": conversationID.String(),
+			"messageId":      item.MessageID.String(),
+			"tickStatus":     item.Status,
+		}
+
+		if err := s.notifications.NotifyUsers([]uuid.UUID{item.SenderID}, "message_tick_updated", payload); err != nil {
+			log.Printf("conversation: failed to notify tick update for message %s: %v", item.MessageID, err)
+		}
+	}
+}
+
+func (s *ConversationService) GetMessageInfo(
+	ctx context.Context,
+	actingUserID, messageID uuid.UUID,
+) ([]models.MemberReadStatus, error) {
+	message, err := s.conversations.GetMessageByID(ctx, messageID)
+	if errors.Is(err, repository.ErrNotFound) {
+		return nil, ErrMessageNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("conversation: failed to get message: %w", err)
+	}
+
+	if message.SenderID != actingUserID.String() {
+		return nil, ErrNotMessageSender
+	}
+
+	conversationID, err := uuid.Parse(message.ConversationID)
+	if err != nil {
+		return nil, fmt.Errorf("conversation: invalid conversation id on message: %w", err)
+	}
+
+	conversation, err := s.conversations.GetByID(ctx, conversationID)
+	if errors.Is(err, repository.ErrNotFound) {
+		return nil, ErrConversationNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("conversation: failed to fetch conversation: %w", err)
+	}
+
+	if conversation.Type == models.ConversationTypeGroup {
+		members, err := s.conversations.GetMessageInfo(ctx, messageID)
+		if err != nil {
+			return nil, fmt.Errorf("conversation: failed to get message info: %w", err)
+		}
+
+		return members, nil
+	}
+
+	if conversation.Type != models.ConversationTypeDirect {
+		return nil, ErrNotAuthorized
+	}
+
+	member, err := s.conversations.GetDirectMessageInfo(ctx, messageID)
+	if errors.Is(err, repository.ErrNotFound) {
+		return nil, ErrMessageNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("conversation: failed to get direct message info: %w", err)
+	}
+
+	return []models.MemberReadStatus{*member}, nil
+}
+
 func scrubMessage(message *models.Message) {
 	if message.IsUnsent {
 		message.Content = unsentMessagePlaceholder
@@ -968,6 +1229,9 @@ func messageToNotificationPayload(message *models.Message, senderName string) ma
 			"content":  message.ReplyTo.Content,
 			"isUnsent": message.ReplyTo.IsUnsent,
 		}
+	}
+	if message.TickStatus != nil {
+		payload["tickStatus"] = *message.TickStatus
 	}
 
 	return payload

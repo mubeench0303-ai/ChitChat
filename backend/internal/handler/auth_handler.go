@@ -68,6 +68,28 @@ type UpdateProfileRequest struct {
 	Bio      string `json:"bio"`
 }
 
+type ChangePasswordRequest struct {
+	CurrentPassword string `json:"currentPassword" validate:"required"`
+	NewPassword     string `json:"newPassword" validate:"required,min=8"`
+}
+
+type DeleteAccountRequest struct {
+	Password string `json:"password" validate:"required"`
+}
+
+func clearAuthCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     middleware.AuthTokenCookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		Expires:  time.Unix(0, 0),
+		HttpOnly: true,
+		Secure:   false,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
 type userResponse struct {
 	ID         string  `json:"id"`
 	Username   string  `json:"username"`
@@ -195,6 +217,10 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
+	if errors.Is(err, service.ErrAccountNoLongerExists) {
+		writeError(w, http.StatusForbidden, "This account no longer exists")
+		return
+	}
 	if errors.Is(err, service.ErrEmailNotVerified) {
 		writeError(w, http.StatusForbidden, err.Error())
 		return
@@ -314,6 +340,54 @@ func (h *AuthHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, toMeUserResponse(user))
+}
+
+func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
+	userIDStr, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	var req ChangePasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if err := h.validator.Struct(req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"message": "Validation failed",
+			"errors":  validationErrors(err),
+		})
+		return
+	}
+
+	err = h.auth.ChangePassword(r.Context(), userID, req.CurrentPassword, req.NewPassword)
+	if errors.Is(err, service.ErrIncorrectCurrentPassword) ||
+		errors.Is(err, service.ErrNewPasswordSameAsCurrent) ||
+		errors.Is(err, service.ErrInvalidPasswordStrength) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrUserNotFound) {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to change password")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"message": "Password changed successfully.",
+	})
 }
 
 func (h *AuthHandler) UpdateAvatar(w http.ResponseWriter, r *http.Request) {
@@ -447,6 +521,10 @@ func (h *AuthHandler) GetPublicProfile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "User not found")
 		return
 	}
+	if errors.Is(err, service.ErrUserNoLongerExists) {
+		writeError(w, http.StatusGone, "This user no longer exists")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to fetch profile")
 		return
@@ -492,19 +570,58 @@ func (h *AuthHandler) CheckUsername(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     middleware.AuthTokenCookieName,
-		Value:    "",
-		Path:     "/",
-		MaxAge:   -1,
-		Expires:  time.Unix(0, 0),
-		HttpOnly: true,
-		Secure:   false,
-		SameSite: http.SameSiteLaxMode,
-	})
+	clearAuthCookie(w)
 
 	writeJSON(w, http.StatusOK, map[string]string{
 		"message": "Logged out successfully.",
+	})
+}
+
+func (h *AuthHandler) DeleteAccount(w http.ResponseWriter, r *http.Request) {
+	userIDStr, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	var req DeleteAccountRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if err := h.validator.Struct(req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"message": "Validation failed",
+			"errors":  validationErrors(err),
+		})
+		return
+	}
+
+	err = h.auth.DeleteAccount(r.Context(), userID, req.Password)
+	if errors.Is(err, service.ErrIncorrectCurrentPassword) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrUserNotFound) {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to delete account")
+		return
+	}
+
+	clearAuthCookie(w)
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"message": "Account deleted successfully",
 	})
 }
 

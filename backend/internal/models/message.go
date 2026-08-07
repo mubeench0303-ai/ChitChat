@@ -28,6 +28,17 @@ type Message struct {
 	Reactions        []ReactionSummary  `json:"reactions,omitempty"`
 	DeliveredAt      *time.Time         `json:"deliveredAt,omitempty"`
 	Status           *string            `json:"status,omitempty"`
+	TickStatus       *string            `json:"tickStatus,omitempty"`
 	CreatedAt        time.Time          `json:"createdAt"`
 	UpdatedAt        time.Time          `json:"updatedAt"`
+}
+
+type MemberReadStatus struct {
+	UserID      string     `json:"userId"`
+	FullName    string     `json:"fullName"`
+	Username    string     `json:"username"`
+	AvatarURL   *string    `json:"avatarUrl,omitempty"`
+	Status      string     `json:"status"`
+	DeliveredAt *time.Time `json:"deliveredAt,omitempty"`
+	ReadAt      *time.Time `json:"readAt,omitempty"`
 }

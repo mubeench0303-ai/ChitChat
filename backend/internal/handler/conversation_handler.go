@@ -195,6 +195,70 @@ func (h *ConversationHandler) BlockConnection(w http.ResponseWriter, r *http.Req
 	h.manageConversation(w, r, h.conversations.BlockConnection)
 }
 
+func (h *ConversationHandler) GetBlockedUsers(w http.ResponseWriter, r *http.Request) {
+	userIDStr, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	blocked, err := h.conversations.GetBlockedUsers(r.Context(), userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to fetch blocked users")
+		return
+	}
+
+	if blocked == nil {
+		blocked = []models.BlockedUser{}
+	}
+
+	writeJSON(w, http.StatusOK, blocked)
+}
+
+func (h *ConversationHandler) UnblockUser(w http.ResponseWriter, r *http.Request) {
+	userIDStr, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	conversationID, err := uuid.Parse(chi.URLParam(r, "conversationId"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid conversation ID")
+		return
+	}
+
+	err = h.conversations.UnblockUser(r.Context(), userID, conversationID)
+	if errors.Is(err, service.ErrConversationNotFound) {
+		writeError(w, http.StatusNotFound, "Conversation not found")
+		return
+	}
+	if errors.Is(err, service.ErrNotBlockInitiator) {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to unblock user")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"message": "User unblocked successfully",
+	})
+}
+
 func (h *ConversationHandler) manageConversation(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -369,6 +433,10 @@ func (h *ConversationHandler) SendMessage(w http.ResponseWriter, r *http.Request
 	}
 	if errors.Is(err, service.ErrConversationNotAccepted) {
 		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrRecipientNoLongerExists) {
+		writeError(w, http.StatusGone, err.Error())
 		return
 	}
 	if errors.Is(err, service.ErrInvalidReplyTarget) {
@@ -554,6 +622,46 @@ func (h *ConversationHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *ConversationHandler) GetMessageInfo(w http.ResponseWriter, r *http.Request) {
+	userIDStr, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	messageID, err := uuid.Parse(chi.URLParam(r, "messageId"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid message ID")
+		return
+	}
+
+	members, err := h.conversations.GetMessageInfo(r.Context(), userID, messageID)
+	if errors.Is(err, service.ErrMessageNotFound) {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrNotMessageSender) {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrNotAuthorized) {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to get message info")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, members)
 }
 
 type ToggleReactionBody struct {

@@ -41,6 +41,9 @@ const (
 
 var (
 	profileUsernamePattern = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
+	passwordUppercasePattern = regexp.MustCompile(`[A-Z]`)
+	passwordLowercasePattern = regexp.MustCompile(`[a-z]`)
+	passwordNumberPattern    = regexp.MustCompile(`[0-9]`)
 )
 
 var (
@@ -60,6 +63,11 @@ var (
 	ErrNoAvatar                 = errors.New("no profile photo to remove")
 	ErrInvalidSearchQuery       = errors.New("search query is required")
 	ErrPublicProfileNotFound    = errors.New("user not found")
+	ErrUserNoLongerExists       = errors.New("this user no longer exists")
+	ErrIncorrectCurrentPassword = errors.New("current password is incorrect")
+	ErrNewPasswordSameAsCurrent = errors.New("new password must be different from your current password")
+	ErrInvalidPasswordStrength  = errors.New("password must be at least 8 characters and contain uppercase, lowercase, and a number")
+	ErrAccountNoLongerExists    = errors.New("this account no longer exists")
 )
 
 type LoginResult struct {
@@ -75,6 +83,7 @@ type SignupResult struct {
 type AuthService struct {
 	db            *pgxpool.Pool
 	users         *repository.UserRepository
+	conversations *repository.ConversationRepository
 	verifications *repository.VerificationRepository
 	mailer        *email.Client
 	cloudinary    *cloudinary.Client
@@ -84,6 +93,7 @@ type AuthService struct {
 func NewAuthService(
 	db *pgxpool.Pool,
 	users *repository.UserRepository,
+	conversations *repository.ConversationRepository,
 	verifications *repository.VerificationRepository,
 	mailer *email.Client,
 	cloudinaryClient *cloudinary.Client,
@@ -92,6 +102,7 @@ func NewAuthService(
 	return &AuthService{
 		db:            db,
 		users:         users,
+		conversations: conversations,
 		verifications: verifications,
 		mailer:        mailer,
 		cloudinary:    cloudinaryClient,
@@ -223,6 +234,10 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (*Login
 	}
 	if err != nil {
 		return nil, fmt.Errorf("auth: failed to find user: %w", err)
+	}
+
+	if user.IsDeleted {
+		return nil, ErrAccountNoLongerExists
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
@@ -391,6 +406,63 @@ func (s *AuthService) ResetPassword(ctx context.Context, email, code, newPasswor
 	return nil
 }
 
+func (s *AuthService) ChangePassword(
+	ctx context.Context,
+	userID uuid.UUID,
+	currentPassword, newPassword string,
+) error {
+	user, err := s.users.GetUserByID(ctx, userID.String())
+	if errors.Is(err, repository.ErrNotFound) {
+		return ErrUserNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("auth: failed to fetch user: %w", err)
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(currentPassword)); err != nil {
+		return ErrIncorrectCurrentPassword
+	}
+
+	if currentPassword == newPassword {
+		return ErrNewPasswordSameAsCurrent
+	}
+
+	if err := validatePasswordStrength(newPassword); err != nil {
+		return err
+	}
+
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcryptCost)
+	if err != nil {
+		return fmt.Errorf("auth: failed to hash password: %w", err)
+	}
+
+	if err := s.users.UpdatePassword(ctx, userID, string(passwordHash)); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return ErrUserNotFound
+		}
+		return fmt.Errorf("auth: failed to update password: %w", err)
+	}
+
+	return nil
+}
+
+func validatePasswordStrength(password string) error {
+	if utf8.RuneCountInString(password) < 8 {
+		return ErrInvalidPasswordStrength
+	}
+	if !passwordUppercasePattern.MatchString(password) {
+		return ErrInvalidPasswordStrength
+	}
+	if !passwordLowercasePattern.MatchString(password) {
+		return ErrInvalidPasswordStrength
+	}
+	if !passwordNumberPattern.MatchString(password) {
+		return ErrInvalidPasswordStrength
+	}
+
+	return nil
+}
+
 func (s *AuthService) validateVerificationCode(
 	ctx context.Context,
 	userID string,
@@ -544,6 +616,10 @@ func (s *AuthService) GetPublicProfile(
 		return nil, fmt.Errorf("auth: failed to get public profile: %w", err)
 	}
 
+	if user.IsDeleted {
+		return nil, ErrUserNoLongerExists
+	}
+
 	return &models.PublicProfile{
 		ID:        user.ID,
 		FullName:  user.FullName,
@@ -627,6 +703,94 @@ func (s *AuthService) RemoveAvatar(
 	}
 
 	return updatedUser, nil
+}
+
+func (s *AuthService) DeleteAccount(
+	ctx context.Context,
+	userID uuid.UUID,
+	password string,
+) error {
+	user, err := s.users.GetUserByID(ctx, userID.String())
+	if errors.Is(err, repository.ErrNotFound) {
+		return ErrUserNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("auth: failed to load user: %w", err)
+	}
+
+	if user.IsDeleted {
+		return ErrUserNotFound
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
+		return ErrIncorrectCurrentPassword
+	}
+
+	if user.AvatarURL != nil && strings.TrimSpace(*user.AvatarURL) != "" {
+		if err := s.cloudinary.DeleteImage(ctx, strings.TrimSpace(*user.AvatarURL)); err != nil {
+			return fmt.Errorf("auth: failed to delete avatar from cloudinary: %w", err)
+		}
+	}
+
+	groupIDs, err := s.conversations.GetGroupsCreatedBy(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("auth: failed to list owned groups: %w", err)
+	}
+
+	for _, groupID := range groupIDs {
+		otherMembers, err := s.conversations.GetOtherMembers(ctx, groupID, userID)
+		if err != nil {
+			return fmt.Errorf("auth: failed to list group members: %w", err)
+		}
+
+		if len(otherMembers) == 0 {
+			continue
+		}
+
+		newOwnerID, err := s.conversations.GetOldestMember(ctx, groupID, userID)
+		if err != nil {
+			return fmt.Errorf("auth: failed to find group successor: %w", err)
+		}
+
+		if err := s.conversations.TransferGroupOwnership(ctx, groupID, newOwnerID); err != nil {
+			return fmt.Errorf("auth: failed to transfer group ownership: %w", err)
+		}
+
+		isAdmin, err := s.conversations.IsAdmin(ctx, groupID, newOwnerID)
+		if err != nil {
+			return fmt.Errorf("auth: failed to check successor role: %w", err)
+		}
+
+		if !isAdmin {
+			if err := s.conversations.UpdateMemberRole(
+				ctx,
+				groupID,
+				newOwnerID,
+				models.ConversationMemberRoleAdmin,
+			); err != nil {
+				return fmt.Errorf("auth: failed to promote group successor: %w", err)
+			}
+		}
+	}
+
+	randomSecret := make([]byte, 32)
+	if _, err := rand.Read(randomSecret); err != nil {
+		return fmt.Errorf("auth: failed to generate anonymized password: %w", err)
+	}
+
+	passwordHash, err := bcrypt.GenerateFromPassword(randomSecret, bcryptCost)
+	if err != nil {
+		return fmt.Errorf("auth: failed to hash anonymized password: %w", err)
+	}
+
+	if err := s.users.AnonymizeUser(ctx, userID, string(passwordHash)); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return ErrUserNotFound
+		}
+		return fmt.Errorf("auth: failed to anonymize user: %w", err)
+	}
+
+	return nil
 }
 
 func validateAvatarFile(file multipart.File) error {

@@ -23,6 +23,7 @@ type Conversation struct {
 	DirectPairKey *string   `json:"directPairKey,omitempty"`
 	Status        *string   `json:"status,omitempty"`
 	RequestedBy   *string   `json:"requestedBy,omitempty"`
+	BlockedBy     *string   `json:"blockedBy,omitempty"`
 	MemberCount   *int      `json:"memberCount,omitempty"`
 	CreatedAt     time.Time `json:"createdAt"`
 	UpdatedAt     time.Time `json:"updatedAt"`
@@ -71,4 +72,13 @@ type ConversationWithPreview struct {
 	RequestedAt           time.Time  `json:"requestedAt"`
 	RequesterIsOnline     bool       `json:"requesterIsOnline"`
 	RequesterLastSeen     *time.Time `json:"requesterLastSeen,omitempty"`
+	UnreadCount           int        `json:"unreadCount"`
+}
+
+type BlockedUser struct {
+	ConversationID string    `json:"conversationId"`
+	FullName       string    `json:"fullName"`
+	Username       string    `json:"username"`
+	AvatarURL      *string   `json:"avatarUrl,omitempty"`
+	BlockedAt      time.Time `json:"blockedAt"`
 }
