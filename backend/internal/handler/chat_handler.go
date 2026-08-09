@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/mubeench0303-ai/ChitChat/backend/internal/middleware"
 	"github.com/mubeench0303-ai/ChitChat/backend/internal/models"
 	"github.com/mubeench0303-ai/ChitChat/backend/internal/service"
+	"github.com/mubeench0303-ai/ChitChat/backend/pkg/cloudinary"
 )
 
 func (h *ConversationHandler) GetChatList(w http.ResponseWriter, r *http.Request) {
@@ -43,6 +45,12 @@ func (h *ConversationHandler) GetChatList(w http.ResponseWriter, r *http.Request
 }
 
 const maxSendMessageMultipartBytes = 6 << 20 // 5MB image + form overhead
+const maxBackgroundMultipartBytes = 6 << 20
+
+type setBackgroundRequest struct {
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
 
 func parseOptionalMessageID(raw *string) (*uuid.UUID, error) {
 	if raw == nil || strings.TrimSpace(*raw) == "" {
@@ -131,6 +139,18 @@ func (h *ConversationHandler) SendMessage(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	replyToStatusRaw := strings.TrimSpace(r.FormValue("replyToStatusId"))
+	var replyToStatusRawPtr *string
+	if replyToStatusRaw != "" {
+		replyToStatusRawPtr = &replyToStatusRaw
+	}
+
+	replyToStatusID, err := parseOptionalMessageID(replyToStatusRawPtr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid reply status ID")
+		return
+	}
+
 	var imageFile multipart.File
 	var imageFilename string
 
@@ -160,6 +180,7 @@ func (h *ConversationHandler) SendMessage(w http.ResponseWriter, r *http.Request
 		conversationID,
 		content,
 		replyToMessageID,
+		replyToStatusID,
 		imageFile,
 		imageFilename,
 	)
@@ -179,7 +200,8 @@ func (h *ConversationHandler) SendMessage(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusGone, err.Error())
 		return
 	}
-	if errors.Is(err, service.ErrInvalidReplyTarget) {
+	if errors.Is(err, service.ErrInvalidReplyTarget) ||
+		errors.Is(err, service.ErrInvalidStatusReplyTarget) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -330,4 +352,334 @@ func (h *ConversationHandler) UnsendMessage(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]string{
 		"message": "Message unsent successfully",
 	})
+}
+
+func (h *ConversationHandler) GetFriends(w http.ResponseWriter, r *http.Request) {
+	userIDStr, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	friends, err := h.conversations.GetFriends(r.Context(), userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to fetch friends")
+		return
+	}
+
+	if friends == nil {
+		friends = []models.FriendResponse{}
+	}
+
+	writeJSON(w, http.StatusOK, friends)
+}
+
+func (h *ConversationHandler) ClearChat(w http.ResponseWriter, r *http.Request) {
+	userIDStr, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	actingUserID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	conversationID, err := uuid.Parse(chi.URLParam(r, "conversationId"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid conversation ID")
+		return
+	}
+
+	err = h.conversations.ClearChat(r.Context(), actingUserID, conversationID)
+	if errors.Is(err, service.ErrNotAuthorized) {
+		writeError(w, http.StatusForbidden, "You are not a participant in this conversation")
+		return
+	}
+	if errors.Is(err, service.ErrConversationNotFound) {
+		writeError(w, http.StatusNotFound, "Conversation not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to clear chat")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"message": "Chat cleared successfully",
+	})
+}
+
+func (h *ConversationHandler) PinChat(w http.ResponseWriter, r *http.Request) {
+	userIDStr, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	conversationID, err := uuid.Parse(chi.URLParam(r, "conversationId"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid conversation ID")
+		return
+	}
+
+	err = h.conversations.PinChat(r.Context(), userID, conversationID)
+	if errors.Is(err, service.ErrNotAuthorized) {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrPinLimitReached) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to pin chat")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"message": "Chat pinned",
+	})
+}
+
+func (h *ConversationHandler) UnpinChat(w http.ResponseWriter, r *http.Request) {
+	userIDStr, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	conversationID, err := uuid.Parse(chi.URLParam(r, "conversationId"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid conversation ID")
+		return
+	}
+
+	err = h.conversations.UnpinChat(r.Context(), userID, conversationID)
+	if errors.Is(err, service.ErrNotAuthorized) {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to unpin chat")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"message": "Chat unpinned",
+	})
+}
+
+func (h *ConversationHandler) SetConversationBackground(w http.ResponseWriter, r *http.Request) {
+	userIDStr, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	conversationID, err := uuid.Parse(chi.URLParam(r, "conversationId"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid conversation ID")
+		return
+	}
+
+	var (
+		backgroundType  string
+		backgroundValue string
+	)
+
+	contentType := r.Header.Get("Content-Type")
+	if strings.HasPrefix(contentType, "multipart/form-data") {
+		if err := r.ParseMultipartForm(maxBackgroundMultipartBytes); err != nil {
+			writeError(w, http.StatusBadRequest, "Invalid multipart form")
+			return
+		}
+
+		backgroundType = strings.TrimSpace(r.FormValue("type"))
+		if backgroundType != service.BackgroundTypeCustom {
+			writeError(w, http.StatusBadRequest, "Custom background requires type \"custom\"")
+			return
+		}
+
+		file, header, fileErr := r.FormFile("image")
+		switch {
+		case fileErr == nil:
+			defer file.Close()
+		case errors.Is(fileErr, http.ErrMissingFile):
+			writeError(w, http.StatusBadRequest, "Image file is required for custom background")
+			return
+		default:
+			writeError(w, http.StatusBadRequest, "Expected a file field named \"image\"")
+			return
+		}
+
+		if err := validateStatusImageFile(file); err != nil {
+			if errors.Is(err, service.ErrInvalidMessageImageContentType) ||
+				errors.Is(err, service.ErrInvalidMessageImageFileSize) {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeError(w, http.StatusBadRequest, "Invalid image file")
+			return
+		}
+
+		if h.cloudinary == nil {
+			writeError(w, http.StatusInternalServerError, "Image upload is not configured")
+			return
+		}
+
+		imageURL, uploadErr := h.cloudinary.UploadImage(
+			r.Context(),
+			file,
+			header.Filename,
+			cloudinary.BackgroundUploadFolder,
+		)
+		if uploadErr != nil {
+			writeError(w, http.StatusInternalServerError, "Failed to upload background image")
+			return
+		}
+
+		backgroundValue = imageURL
+	} else {
+		var body setBackgroundRequest
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			if !errors.Is(err, io.EOF) {
+				writeError(w, http.StatusBadRequest, "Invalid request body")
+				return
+			}
+		}
+
+		backgroundType = strings.TrimSpace(body.Type)
+		backgroundValue = strings.TrimSpace(body.Value)
+
+		if backgroundType != service.BackgroundTypePreset {
+			writeError(w, http.StatusBadRequest, "Preset background requires type \"preset\"")
+			return
+		}
+	}
+
+	err = h.conversations.SetBackground(
+		r.Context(),
+		userID,
+		conversationID,
+		backgroundType,
+		backgroundValue,
+	)
+	if errors.Is(err, service.ErrNotAuthorized) {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrInvalidBackgroundType) ||
+		errors.Is(err, service.ErrInvalidBackgroundPreset) ||
+		errors.Is(err, service.ErrInvalidBackgroundValue) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to update background")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"message":         "Background updated",
+		"backgroundType":  backgroundType,
+		"backgroundValue": backgroundValue,
+	})
+}
+
+func (h *ConversationHandler) ResetConversationBackground(w http.ResponseWriter, r *http.Request) {
+	userIDStr, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	conversationID, err := uuid.Parse(chi.URLParam(r, "conversationId"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid conversation ID")
+		return
+	}
+
+	err = h.conversations.ResetBackground(r.Context(), userID, conversationID)
+	if errors.Is(err, service.ErrNotAuthorized) {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to reset background")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"message":        "Background reset",
+		"backgroundType": service.BackgroundTypeDefault,
+	})
+}
+
+func (h *ConversationHandler) GetConversationHeaderInfo(w http.ResponseWriter, r *http.Request) {
+	userIDStr, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	conversationID, err := uuid.Parse(chi.URLParam(r, "conversationId"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid conversation ID")
+		return
+	}
+
+	info, err := h.conversations.GetConversationHeaderInfo(r.Context(), userID, conversationID)
+	if errors.Is(err, service.ErrNotAuthorized) {
+		writeError(w, http.StatusForbidden, "You are not a participant in this conversation")
+		return
+	}
+	if errors.Is(err, service.ErrConversationNotFound) {
+		writeError(w, http.StatusNotFound, "Conversation not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to fetch conversation info")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, info)
 }

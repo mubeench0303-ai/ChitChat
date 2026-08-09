@@ -87,6 +87,18 @@ func (h *Hub) SendToUser(userID uuid.UUID, message []byte) {
 	}
 }
 
+func (h *Hub) ConnectedUserIDs() []uuid.UUID {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	userIDs := make([]uuid.UUID, 0, len(h.connections))
+	for userID := range h.connections {
+		userIDs = append(userIDs, userID)
+	}
+
+	return userIDs
+}
+
 func (h *Hub) BroadcastAll(message []byte) {
 	h.mu.RLock()
 	targets := make([]*Connection, 0)

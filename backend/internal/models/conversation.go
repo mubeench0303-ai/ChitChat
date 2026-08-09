@@ -73,6 +73,7 @@ type ConversationWithPreview struct {
 	RequesterIsOnline     bool       `json:"requesterIsOnline"`
 	RequesterLastSeen     *time.Time `json:"requesterLastSeen,omitempty"`
 	UnreadCount           int        `json:"unreadCount"`
+	IsPinned              bool       `json:"isPinned"`
 }
 
 type BlockedUser struct {
@@ -81,4 +82,22 @@ type BlockedUser struct {
 	Username       string    `json:"username"`
 	AvatarURL      *string   `json:"avatarUrl,omitempty"`
 	BlockedAt      time.Time `json:"blockedAt"`
+}
+
+type ConversationHeaderInfo struct {
+	Type string `json:"type"`
+
+	ParticipantID        *string    `json:"participantId,omitempty"`
+	ParticipantFullName  *string    `json:"participantFullName,omitempty"`
+	ParticipantUsername  *string    `json:"participantUsername,omitempty"`
+	ParticipantAvatarURL *string    `json:"participantAvatarUrl,omitempty"`
+	ParticipantIsOnline  *bool      `json:"participantIsOnline,omitempty"`
+	ParticipantLastSeen  *time.Time `json:"participantLastSeen,omitempty"`
+
+	GroupName      *string `json:"groupName,omitempty"`
+	GroupAvatarURL *string `json:"groupAvatarUrl,omitempty"`
+	MemberCount    *int    `json:"memberCount,omitempty"`
+
+	BackgroundType  string  `json:"backgroundType"`
+	BackgroundValue *string `json:"backgroundValue,omitempty"`
 }

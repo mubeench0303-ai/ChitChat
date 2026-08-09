@@ -10,14 +10,22 @@ import (
 
 	"github.com/mubeench0303-ai/ChitChat/backend/internal/middleware"
 	"github.com/mubeench0303-ai/ChitChat/backend/internal/service"
+	"github.com/mubeench0303-ai/ChitChat/backend/pkg/cloudinary"
 )
 
 type ConversationHandler struct {
 	conversations *service.ConversationService
+	cloudinary    *cloudinary.Client
 }
 
-func NewConversationHandler(conversations *service.ConversationService) *ConversationHandler {
-	return &ConversationHandler{conversations: conversations}
+func NewConversationHandler(
+	conversations *service.ConversationService,
+	cloudinaryClient *cloudinary.Client,
+) *ConversationHandler {
+	return &ConversationHandler{
+		conversations: conversations,
+		cloudinary:    cloudinaryClient,
+	}
 }
 func (h *ConversationHandler) RemoveConnection(w http.ResponseWriter, r *http.Request) {
 	h.manageConversation(w, r, h.conversations.RemoveConnection)

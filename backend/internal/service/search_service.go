@@ -32,12 +32,26 @@ func (s *AuthService) SearchUsers(
 
 	results := make([]models.UserSearchResult, 0, len(users))
 	for _, user := range users {
-		results = append(results, models.UserSearchResult{
-			ID:        user.ID,
-			FullName:  user.FullName,
-			Username:  user.Username,
-			AvatarURL: user.AvatarURL,
-		})
+		result := models.UserSearchResult{
+			ID:       user.ID,
+			FullName: user.FullName,
+			Username: user.Username,
+		}
+
+		targetID, parseErr := uuid.Parse(user.ID)
+		if parseErr != nil {
+			return nil, fmt.Errorf("auth: invalid user id in search results: %w", parseErr)
+		}
+
+		canViewPhoto, privacyErr := s.CanView(ctx, currentUserID, targetID, models.PrivacyFieldProfilePhoto)
+		if privacyErr != nil {
+			return nil, fmt.Errorf("auth: failed to check profile photo privacy: %w", privacyErr)
+		}
+		if canViewPhoto {
+			result.AvatarURL = user.AvatarURL
+		}
+
+		results = append(results, result)
 	}
 
 	return results, nil
@@ -45,6 +59,7 @@ func (s *AuthService) SearchUsers(
 
 func (s *AuthService) GetPublicProfile(
 	ctx context.Context,
+	viewerID uuid.UUID,
 	username string,
 ) (*models.PublicProfile, error) {
 	trimmedUsername := strings.TrimSpace(username)
@@ -52,7 +67,7 @@ func (s *AuthService) GetPublicProfile(
 		return nil, ErrPublicProfileNotFound
 	}
 
-	user, err := s.users.GetPublicProfileByUsername(ctx, trimmedUsername)
+	user, relationshipStatus, conversationID, err := s.users.GetPublicProfileByUsername(ctx, viewerID, trimmedUsername)
 	if errors.Is(err, repository.ErrNotFound) {
 		return nil, ErrPublicProfileNotFound
 	}
@@ -64,11 +79,36 @@ func (s *AuthService) GetPublicProfile(
 		return nil, ErrUserNoLongerExists
 	}
 
-	return &models.PublicProfile{
-		ID:        user.ID,
-		FullName:  user.FullName,
-		Username:  user.Username,
-		Bio:       user.Bio,
-		AvatarURL: user.AvatarURL,
-	}, nil
+	targetID, err := uuid.Parse(user.ID)
+	if err != nil {
+		return nil, fmt.Errorf("auth: invalid user id on public profile: %w", err)
+	}
+
+	canViewBio, err := s.CanView(ctx, viewerID, targetID, models.PrivacyFieldBio)
+	if err != nil {
+		return nil, fmt.Errorf("auth: failed to check bio privacy: %w", err)
+	}
+
+	canViewPhoto, err := s.CanView(ctx, viewerID, targetID, models.PrivacyFieldProfilePhoto)
+	if err != nil {
+		return nil, fmt.Errorf("auth: failed to check profile photo privacy: %w", err)
+	}
+
+	profile := &models.PublicProfile{
+		ID:                 user.ID,
+		FullName:           user.FullName,
+		Username:           user.Username,
+		RelationshipStatus: relationshipStatus,
+		ConversationID:     conversationID,
+	}
+
+	if canViewBio {
+		profile.Bio = user.Bio
+	}
+
+	if canViewPhoto {
+		profile.AvatarURL = user.AvatarURL
+	}
+
+	return profile, nil
 }

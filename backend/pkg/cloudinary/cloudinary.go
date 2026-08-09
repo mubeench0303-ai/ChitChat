@@ -16,7 +16,10 @@ import (
 	"time"
 )
 
-const AvatarUploadFolder = "chitchat/avatars"
+const (
+	AvatarUploadFolder      = "chitchat/avatars"
+	BackgroundUploadFolder  = "chitchat/backgrounds"
+)
 
 type Client struct {
 	cloudName  string

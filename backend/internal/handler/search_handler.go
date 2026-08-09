@@ -50,8 +50,14 @@ func (h *AuthHandler) SearchUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) GetPublicProfile(w http.ResponseWriter, r *http.Request) {
-	_, ok := middleware.GetUserID(r.Context())
+	userIDStr, ok := middleware.GetUserID(r.Context())
 	if !ok {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	viewerID, err := uuid.Parse(userIDStr)
+	if err != nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
@@ -62,7 +68,7 @@ func (h *AuthHandler) GetPublicProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	profile, err := h.auth.GetPublicProfile(r.Context(), username)
+	profile, err := h.auth.GetPublicProfile(r.Context(), viewerID, username)
 	if errors.Is(err, service.ErrPublicProfileNotFound) {
 		writeError(w, http.StatusNotFound, "User not found")
 		return

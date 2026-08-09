@@ -36,12 +36,15 @@ func (s *ConversationService) AddGroupMembers(
 		}
 		seen[memberID] = struct{}{}
 
-		_, err := s.users.GetUserByID(ctx, memberID.String())
+		memberUser, err := s.users.GetUserByID(ctx, memberID.String())
 		if errors.Is(err, repository.ErrNotFound) {
 			return ErrGroupMemberNotFound
 		}
 		if err != nil {
 			return fmt.Errorf("conversation: failed to verify member: %w", err)
+		}
+		if memberUser.IsDeleted {
+			return ErrGroupMemberNotFound
 		}
 
 		uniqueMemberIDs = append(uniqueMemberIDs, memberID)

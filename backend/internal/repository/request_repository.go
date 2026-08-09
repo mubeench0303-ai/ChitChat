@@ -156,6 +156,7 @@ func (r *ConversationRepository) ListIncomingRequests(
 		WHERE c.type = $3
 		  AND c.status = $2
 		  AND c.requested_by <> $1
+		  AND u.is_deleted = FALSE
 		ORDER BY COALESCE(latest.created_at, c.created_at) DESC`
 
 	rows, err := r.db.Query(
@@ -267,6 +268,7 @@ func (r *ConversationRepository) GetBlockedConversations(
 		WHERE c.type = $2
 		  AND c.status = $3
 		  AND c.blocked_by = $1
+		  AND u.is_deleted = FALSE
 		ORDER BY c.updated_at DESC`
 
 	rows, err := r.db.Query(
@@ -345,4 +347,33 @@ func (r *ConversationRepository) DeleteConversation(
 	}
 
 	return nil
+}
+
+func (r *ConversationRepository) AreUsersConnected(
+	ctx context.Context,
+	userA, userB uuid.UUID,
+) (bool, error) {
+	const query = `
+		SELECT EXISTS (
+			SELECT 1
+			FROM conversations c
+			WHERE c.type = $1
+			  AND c.status = $2
+			  AND c.direct_pair_key = $3
+		)`
+
+	var connected bool
+
+	err := r.db.QueryRow(
+		ctx,
+		query,
+		models.ConversationTypeDirect,
+		models.ConversationStatusAccepted,
+		directPairKey(userA, userB),
+	).Scan(&connected)
+	if err != nil {
+		return false, err
+	}
+
+	return connected, nil
 }

@@ -245,6 +245,75 @@ func (r *ConversationRepository) PromoteMemberAndRemoveMember(
 	return tx.Commit(ctx)
 }
 
+func (r *ConversationRepository) ListEligibleGroupMemberConnections(
+	ctx context.Context,
+	userID, groupConversationID uuid.UUID,
+) ([]models.FriendResponse, error) {
+	const query = `
+		SELECT
+			u.id,
+			u.full_name,
+			u.username,
+			u.avatar_url,
+			u.is_online,
+			c.id
+		FROM conversations c
+		JOIN conversation_members cm_self
+			ON cm_self.conversation_id = c.id
+			AND cm_self.user_id = $1
+		JOIN conversation_members cm_other
+			ON cm_other.conversation_id = c.id
+			AND cm_other.user_id <> $1
+		JOIN users u ON u.id = cm_other.user_id
+		WHERE c.type = $2
+		  AND c.status = $3
+		  AND u.is_deleted = FALSE
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM conversation_members existing
+			WHERE existing.conversation_id = $4
+			  AND existing.user_id = u.id
+		  )
+		ORDER BY u.full_name ASC`
+
+	rows, err := r.db.Query(
+		ctx,
+		query,
+		userID.String(),
+		models.ConversationTypeDirect,
+		models.ConversationStatusAccepted,
+		groupConversationID.String(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	connections := make([]models.FriendResponse, 0)
+	for rows.Next() {
+		var connection models.FriendResponse
+
+		if err := rows.Scan(
+			&connection.ID,
+			&connection.FullName,
+			&connection.Username,
+			&connection.AvatarURL,
+			&connection.IsOnline,
+			&connection.ConversationID,
+		); err != nil {
+			return nil, err
+		}
+
+		connections = append(connections, connection)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return connections, nil
+}
+
 func (r *ConversationRepository) GetGroupsCreatedBy(
 	ctx context.Context,
 	userID uuid.UUID,

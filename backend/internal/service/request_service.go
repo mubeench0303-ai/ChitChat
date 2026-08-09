@@ -20,7 +20,7 @@ func (s *ConversationService) SendMessageRequest(
 	trimmedUsername := strings.TrimSpace(targetUsername)
 	trimmedContent := strings.TrimSpace(content)
 
-	targetUser, err := s.users.GetPublicProfileByUsername(ctx, trimmedUsername)
+	targetUser, _, _, err := s.users.GetPublicProfileByUsername(ctx, senderID, trimmedUsername)
 	if errors.Is(err, repository.ErrNotFound) {
 		return nil, ErrPublicProfileNotFound
 	}
@@ -86,7 +86,7 @@ func (s *ConversationService) SendMessageRequest(
 		return nil, fmt.Errorf("conversation: invalid conversation id: %w", err)
 	}
 
-	message, err := s.conversations.CreateMessage(ctx, conversationUUID, senderID, trimmedContent, nil, nil)
+	message, err := s.conversations.CreateMessage(ctx, conversationUUID, senderID, trimmedContent, nil, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("conversation: failed to create message: %w", err)
 	}

@@ -19,6 +19,14 @@ type UserNotifier interface {
 	NotifyUsers(userIDs []uuid.UUID, eventType string, payload interface{}) error
 }
 
+type PresenceFilter interface {
+	FilterPresenceRecipients(
+		ctx context.Context,
+		targetUserID uuid.UUID,
+		connectedUserIDs []uuid.UUID,
+	) ([]uuid.UUID, error)
+}
+
 type PendingDeliveryHandler interface {
 	DeliverPendingMessages(ctx context.Context, userID uuid.UUID) error
 }
@@ -41,6 +49,7 @@ func ServeWS(
 	users *repository.UserRepository,
 	notifier UserNotifier,
 	deliveryHandler PendingDeliveryHandler,
+	presenceFilter PresenceFilter,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie(middleware.AuthTokenCookieName)
@@ -82,7 +91,7 @@ func ServeWS(
 		if err := users.SetOnlineStatus(ctx, userID, true); err != nil {
 			log.Printf("ws: failed to set user %s online: %v", userID, err)
 		} else {
-			broadcastPresence(hub, userID, true, nil)
+			broadcastPresence(ctx, hub, presenceFilter, notifier, userID, true, nil)
 		}
 
 		if deliveryHandler != nil {
@@ -92,7 +101,7 @@ func ServeWS(
 		}
 
 		go func() {
-			defer handleDisconnect(ctx, hub, users, userID, connectionID)
+			defer handleDisconnect(ctx, hub, users, presenceFilter, notifier, userID, connectionID)
 			defer wsConn.Close(websocket.StatusNormalClosure, "")
 
 			readCtx := context.Background()
@@ -115,6 +124,8 @@ func handleDisconnect(
 	ctx context.Context,
 	hub *Hub,
 	users *repository.UserRepository,
+	presenceFilter PresenceFilter,
+	notifier UserNotifier,
 	userID, connectionID uuid.UUID,
 ) {
 	hub.Unregister(userID, connectionID)
@@ -133,13 +144,18 @@ func handleDisconnect(
 		log.Printf("ws: failed to set last seen for user %s: %v", userID, err)
 	}
 
-	broadcastPresence(hub, userID, false, &lastSeenAt)
+	broadcastPresence(ctx, hub, presenceFilter, notifier, userID, false, &lastSeenAt)
 }
 
-func broadcastPresence(hub *Hub, userID uuid.UUID, isOnline bool, lastSeen *time.Time) {
-	// TODO(groups): presence is broadcast to all connected clients for direct-chat
-	// contacts (frontend filters by userId). Per-group member presence fan-out is
-	// intentionally out of scope until group UI shows online status.
+func broadcastPresence(
+	ctx context.Context,
+	hub *Hub,
+	presenceFilter PresenceFilter,
+	notifier UserNotifier,
+	userID uuid.UUID,
+	isOnline bool,
+	lastSeen *time.Time,
+) {
 	payload := map[string]interface{}{
 		"userId":   userID.String(),
 		"isOnline": isOnline,
@@ -149,18 +165,20 @@ func broadcastPresence(hub *Hub, userID uuid.UUID, isOnline bool, lastSeen *time
 		payload["lastSeen"] = lastSeen.UTC().Format(time.RFC3339)
 	}
 
-	envelope := map[string]interface{}{
-		"type":    "presence",
-		"payload": payload,
-	}
-
-	message, err := json.Marshal(envelope)
-	if err != nil {
-		log.Printf("ws: failed to marshal presence event: %v", err)
+	if presenceFilter == nil || notifier == nil {
+		log.Printf("ws: presence filter or notifier not configured; skipping presence broadcast")
 		return
 	}
 
-	hub.BroadcastAll(message)
+	recipients, err := presenceFilter.FilterPresenceRecipients(ctx, userID, hub.ConnectedUserIDs())
+	if err != nil {
+		log.Printf("ws: failed to filter presence recipients for user %s: %v", userID, err)
+		return
+	}
+
+	if err := notifier.NotifyUsers(recipients, "presence", payload); err != nil {
+		log.Printf("ws: failed to broadcast presence for user %s: %v", userID, err)
+	}
 }
 
 func handleIncomingMessage(

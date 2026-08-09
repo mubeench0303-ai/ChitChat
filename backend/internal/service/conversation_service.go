@@ -33,6 +33,7 @@ var (
 	ErrEditWindowExpired              = errors.New("edit window expired")
 	ErrUnsendWindowExpired            = errors.New("unsend window expired")
 	ErrInvalidReplyTarget             = errors.New("reply target not in this conversation")
+	ErrInvalidStatusReplyTarget       = errors.New("invalid status reply target")
 	ErrInvalidReactionEmoji           = errors.New("invalid reaction emoji")
 	ErrInvalidGroupName               = errors.New("group name is required")
 	ErrGroupNameTooLong               = errors.New("group name must be at most 100 characters")
@@ -46,26 +47,52 @@ var (
 	ErrUseLeaveGroupInstead           = errors.New("use leave group to remove yourself")
 	ErrWouldLeaveZeroAdmins           = errors.New("group must have at least one admin")
 	ErrRecipientNoLongerExists        = errors.New("recipient no longer exists")
+	ErrPinLimitReached                = errors.New("you can only pin up to 3 chats — unpin one first")
+	ErrInvalidBackgroundType          = errors.New("invalid background type")
+	ErrInvalidBackgroundPreset        = errors.New("invalid background preset")
+	ErrInvalidBackgroundValue         = errors.New("background value is required")
 )
+
+const (
+	BackgroundTypeDefault = "default"
+	BackgroundTypePreset  = "preset"
+	BackgroundTypeCustom  = "custom"
+)
+
+var allowedBackgroundPresets = map[string]struct{}{
+	"preset_1": {},
+	"preset_2": {},
+	"preset_3": {},
+	"preset_4": {},
+	"preset_5": {},
+	"preset_6": {},
+	"preset_7": {},
+}
 
 type ConversationService struct {
 	users         *repository.UserRepository
 	conversations *repository.ConversationRepository
+	statuses      *repository.StatusRepository
 	notifications NotificationService
 	cloudinary    *cloudinary.Client
+	privacy       PrivacyChecker
 }
 
 func NewConversationService(
 	users *repository.UserRepository,
 	conversations *repository.ConversationRepository,
+	statuses *repository.StatusRepository,
 	notifications NotificationService,
 	cloudinaryClient *cloudinary.Client,
+	privacy PrivacyChecker,
 ) *ConversationService {
 	return &ConversationService{
 		users:         users,
 		conversations: conversations,
+		statuses:      statuses,
 		notifications: notifications,
 		cloudinary:    cloudinaryClient,
+		privacy:       privacy,
 	}
 }
 

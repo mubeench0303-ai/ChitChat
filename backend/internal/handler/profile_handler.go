@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/mubeench0303-ai/ChitChat/backend/internal/middleware"
+	"github.com/mubeench0303-ai/ChitChat/backend/internal/models"
 	"github.com/mubeench0303-ai/ChitChat/backend/internal/service"
 )
 
@@ -275,5 +277,210 @@ func (h *AuthHandler) DeleteAccount(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]string{
 		"message": "Account deleted successfully",
+	})
+}
+
+type UpdatePrivacySettingRequest struct {
+	Visibility string `json:"visibility"`
+}
+
+type AddPrivacyExceptionRequest struct {
+	ExcludedUserID string `json:"excludedUserId"`
+}
+
+func (h *AuthHandler) GetPrivacySettings(w http.ResponseWriter, r *http.Request) {
+	userIDStr, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	settings, err := h.auth.GetMyPrivacySettings(r.Context(), userID)
+	if errors.Is(err, service.ErrUserNotFound) {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to load privacy settings")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, settings)
+}
+
+func (h *AuthHandler) UpdatePrivacySetting(w http.ResponseWriter, r *http.Request) {
+	userIDStr, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	field := chi.URLParam(r, "field")
+	if err := service.ValidatePrivacyField(field); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	var req UpdatePrivacySettingRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	err = h.auth.UpdatePrivacySetting(r.Context(), userID, field, req.Visibility)
+	if errors.Is(err, service.ErrInvalidPrivacyField) ||
+		errors.Is(err, service.ErrInvalidPrivacyVisibility) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrUserNotFound) {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to update privacy setting")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"message": "Privacy setting updated",
+	})
+}
+
+func (h *AuthHandler) GetPrivacyExceptions(w http.ResponseWriter, r *http.Request) {
+	userIDStr, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	field := chi.URLParam(r, "field")
+	if err := service.ValidatePrivacyField(field); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	exceptions, err := h.auth.GetExceptionsList(r.Context(), userID, field)
+	if errors.Is(err, service.ErrInvalidPrivacyField) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to load privacy exceptions")
+		return
+	}
+
+	if exceptions == nil {
+		exceptions = []models.PrivacyExceptionUser{}
+	}
+
+	writeJSON(w, http.StatusOK, exceptions)
+}
+
+func (h *AuthHandler) AddPrivacyException(w http.ResponseWriter, r *http.Request) {
+	userIDStr, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	field := chi.URLParam(r, "field")
+	if err := service.ValidatePrivacyField(field); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	var req AddPrivacyExceptionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	excludedUserID, err := uuid.Parse(strings.TrimSpace(req.ExcludedUserID))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid excluded user ID")
+		return
+	}
+
+	err = h.auth.AddPrivacyException(r.Context(), userID, field, excludedUserID)
+	if errors.Is(err, service.ErrInvalidPrivacyField) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrPrivacyExceptionNotFriend) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to add privacy exception")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]string{
+		"message": "Privacy exception added",
+	})
+}
+
+func (h *AuthHandler) RemovePrivacyException(w http.ResponseWriter, r *http.Request) {
+	userIDStr, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	field := chi.URLParam(r, "field")
+	if err := service.ValidatePrivacyField(field); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	excludedUserID, err := uuid.Parse(chi.URLParam(r, "excludedUserId"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid excluded user ID")
+		return
+	}
+
+	err = h.auth.RemovePrivacyException(r.Context(), userID, field, excludedUserID)
+	if errors.Is(err, service.ErrInvalidPrivacyField) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to remove privacy exception")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"message": "Privacy exception removed",
 	})
 }

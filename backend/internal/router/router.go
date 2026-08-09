@@ -18,7 +18,9 @@ import (
 func New(
 	authHandler *handler.AuthHandler,
 	conversationHandler *handler.ConversationHandler,
+	statusHandler *handler.StatusHandler,
 	conversationService *service.ConversationService,
+	authService *service.AuthService,
 	authMiddleware *authmiddleware.AuthMiddleware,
 	hub *ws.Hub,
 	jwtHelper *jwthelper.Helper,
@@ -36,7 +38,7 @@ func New(
 	r.Use(middleware.Recoverer)
 	r.Use(authmiddleware.CORS(allowedOrigins))
 
-	r.Get("/ws", ws.ServeWS(hub, jwtHelper, wsOriginPatterns, conversationRepo, userRepo, notifier, conversationService))
+	r.Get("/ws", ws.ServeWS(hub, jwtHelper, wsOriginPatterns, conversationRepo, userRepo, notifier, conversationService, authService))
 
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -69,6 +71,7 @@ func New(
 		api.Group(func(protected chi.Router) {
 			protected.Use(authMiddleware.RequireAuth)
 			protected.Get("/users/search", authHandler.SearchUsers)
+			protected.Get("/users/friends", conversationHandler.GetFriends)
 			protected.Get("/users/blocked", conversationHandler.GetBlockedUsers)
 			protected.Get("/users/{username}", authHandler.GetPublicProfile)
 			protected.Post("/messages/request", conversationHandler.SendMessageRequest)
@@ -78,6 +81,7 @@ func New(
 			protected.Post("/messages/requests/{conversationId}/block", conversationHandler.BlockRequest)
 			protected.Get("/chats", conversationHandler.GetChatList)
 			protected.Get("/conversations/{conversationId}/messages", conversationHandler.GetMessages)
+			protected.Get("/conversations/{conversationId}/info", conversationHandler.GetConversationHeaderInfo)
 			protected.Post("/conversations/{conversationId}/messages", conversationHandler.SendMessage)
 			protected.Post("/conversations/{conversationId}/read", conversationHandler.MarkRead)
 			protected.Get("/messages/{messageId}/info", conversationHandler.GetMessageInfo)
@@ -86,6 +90,11 @@ func New(
 			protected.Post("/messages/{messageId}/unsend", conversationHandler.UnsendMessage)
 			protected.Post("/messages/{messageId}/reactions", conversationHandler.ToggleReaction)
 			protected.Delete("/conversations/{conversationId}", conversationHandler.RemoveConnection)
+			protected.Post("/conversations/{conversationId}/clear", conversationHandler.ClearChat)
+			protected.Post("/conversations/{conversationId}/pin", conversationHandler.PinChat)
+			protected.Delete("/conversations/{conversationId}/pin", conversationHandler.UnpinChat)
+			protected.Put("/conversations/{conversationId}/background", conversationHandler.SetConversationBackground)
+			protected.Delete("/conversations/{conversationId}/background", conversationHandler.ResetConversationBackground)
 			protected.Post("/conversations/{conversationId}/block", conversationHandler.BlockConnection)
 			protected.Patch("/conversations/{conversationId}/unblock", conversationHandler.UnblockUser)
 			protected.Post("/groups", conversationHandler.CreateGroup)
@@ -96,6 +105,17 @@ func New(
 			protected.Delete("/groups/{conversationId}/members/{userId}", conversationHandler.RemoveGroupMember)
 			protected.Post("/groups/{conversationId}/leave", conversationHandler.LeaveGroup)
 			protected.Patch("/groups/{conversationId}/members/{userId}/role", conversationHandler.UpdateMemberRole)
+			protected.Get("/settings/privacy", authHandler.GetPrivacySettings)
+			protected.Patch("/settings/privacy/{field}", authHandler.UpdatePrivacySetting)
+			protected.Get("/settings/privacy/{field}/exceptions", authHandler.GetPrivacyExceptions)
+			protected.Post("/settings/privacy/{field}/exceptions", authHandler.AddPrivacyException)
+			protected.Delete("/settings/privacy/{field}/exceptions/{excludedUserId}", authHandler.RemovePrivacyException)
+			protected.Post("/statuses", statusHandler.CreateStatus)
+			protected.Get("/statuses/me", statusHandler.GetMyStatuses)
+			protected.Get("/statuses/feed", statusHandler.GetStatusFeed)
+			protected.Post("/statuses/{id}/view", statusHandler.MarkStatusViewed)
+			protected.Get("/statuses/{id}/viewers", statusHandler.GetStatusViewers)
+			protected.Delete("/statuses/{id}", statusHandler.DeleteStatus)
 		})
 	})
 

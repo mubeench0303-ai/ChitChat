@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -15,15 +16,17 @@ func (r *ConversationRepository) CreateMessage(
 	conversationID, senderID uuid.UUID,
 	content string,
 	replyToMessageID *uuid.UUID,
+	replyToStatusID *uuid.UUID,
 	imageURL *string,
 ) (*models.Message, error) {
 	const query = `
-		INSERT INTO messages (conversation_id, sender_id, content, reply_to_message_id, image_url)
-		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id, conversation_id, sender_id, content, image_url, is_edited, is_unsent, reply_to_message_id, delivered_at, created_at, updated_at`
+		INSERT INTO messages (conversation_id, sender_id, content, reply_to_message_id, reply_to_status_id, image_url)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id, conversation_id, sender_id, content, image_url, is_edited, is_unsent, reply_to_message_id, reply_to_status_id, delivered_at, created_at, updated_at`
 
 	var message models.Message
 	var replyToID *string
+	var replyToStatusIDValue *string
 
 	err := r.db.QueryRow(
 		ctx,
@@ -32,6 +35,7 @@ func (r *ConversationRepository) CreateMessage(
 		senderID.String(),
 		content,
 		replyToMessageID,
+		replyToStatusID,
 		imageURL,
 	).Scan(
 		&message.ID,
@@ -42,6 +46,7 @@ func (r *ConversationRepository) CreateMessage(
 		&message.IsEdited,
 		&message.IsUnsent,
 		&replyToID,
+		&replyToStatusIDValue,
 		&message.DeliveredAt,
 		&message.CreatedAt,
 		&message.UpdatedAt,
@@ -51,6 +56,7 @@ func (r *ConversationRepository) CreateMessage(
 	}
 
 	message.ReplyToMessageID = replyToID
+	message.ReplyToStatusID = replyToStatusIDValue
 
 	return &message, nil
 }
@@ -80,6 +86,37 @@ func scanMessageReplyTo(
 	}
 
 	return replyTo
+}
+
+func scanMessageReplyToStatus(
+	statusID, ownerID, statusType *string,
+	content, imageURL, backgroundColor *string,
+) *models.MessageReplyToStatus {
+	if statusID == nil || *statusID == "" {
+		return nil
+	}
+
+	replyToStatus := &models.MessageReplyToStatus{
+		ID: *statusID,
+	}
+
+	if ownerID != nil {
+		replyToStatus.OwnerID = *ownerID
+	}
+	if statusType != nil {
+		replyToStatus.Type = *statusType
+	}
+	if content != nil {
+		replyToStatus.Content = content
+	}
+	if imageURL != nil {
+		replyToStatus.ImageURL = imageURL
+	}
+	if backgroundColor != nil {
+		replyToStatus.BackgroundColor = backgroundColor
+	}
+
+	return replyToStatus
 }
 
 func (r *ConversationRepository) EditMessage(
@@ -155,7 +192,8 @@ func (r *ConversationRepository) ListConversations(
 			combined.requested_at,
 			combined.requester_is_online,
 			combined.requester_last_seen,
-			combined.unread_count
+			combined.unread_count,
+			combined.is_pinned
 		FROM (
 			SELECT
 				c.id AS conversation_id,
@@ -172,6 +210,7 @@ func (r *ConversationRepository) ListConversations(
 				c.updated_at AS requested_at,
 				u.is_online AS requester_is_online,
 				u.last_seen AS requester_last_seen,
+				cm_self.is_pinned AS is_pinned,
 				(
 					SELECT COUNT(*)::int
 					FROM messages m
@@ -208,6 +247,17 @@ func (r *ConversationRepository) ListConversations(
 			) latest ON true
 			WHERE c.type = $3
 			  AND c.status = $2
+			  AND EXISTS (
+				SELECT 1
+				FROM messages m
+				WHERE m.conversation_id = c.id
+				  AND NOT EXISTS (
+					SELECT 1
+					FROM message_deletions md
+					WHERE md.message_id = m.id
+					  AND md.user_id = $1
+				  )
+			  )
 
 			UNION ALL
 
@@ -226,6 +276,7 @@ func (r *ConversationRepository) ListConversations(
 				c.updated_at AS requested_at,
 				false AS requester_is_online,
 				NULL::timestamptz AS requester_last_seen,
+				cm_self.is_pinned AS is_pinned,
 				(
 					SELECT COUNT(*)::int
 					FROM messages m
@@ -257,8 +308,19 @@ func (r *ConversationRepository) ListConversations(
 				LIMIT 1
 			) latest ON true
 			WHERE c.type = $4
+			  AND EXISTS (
+				SELECT 1
+				FROM messages m
+				WHERE m.conversation_id = c.id
+				  AND NOT EXISTS (
+					SELECT 1
+					FROM message_deletions md
+					WHERE md.message_id = m.id
+					  AND md.user_id = $1
+				  )
+			  )
 		) combined
-		ORDER BY combined.latest_message_at DESC`
+		ORDER BY combined.is_pinned DESC, combined.latest_message_at DESC`
 
 	rows, err := r.db.Query(
 		ctx,
@@ -293,6 +355,7 @@ func (r *ConversationRepository) ListConversations(
 			&conversation.RequesterIsOnline,
 			&conversation.RequesterLastSeen,
 			&conversation.UnreadCount,
+			&conversation.IsPinned,
 		); err != nil {
 			return nil, err
 		}
@@ -373,16 +436,24 @@ func (r *ConversationRepository) ListMessages(
 			m.is_edited,
 			m.is_unsent,
 			m.reply_to_message_id,
+			m.reply_to_status_id,
 			m.delivered_at,
 			m.created_at,
 			m.updated_at,
 			rt.id,
 			rt.sender_id,
 			rt.content,
-			rt.is_unsent
+			rt.is_unsent,
+			rs.id,
+			rs.user_id,
+			rs.type,
+			rs.content,
+			rs.image_url,
+			rs.background_color
 		FROM messages m
 		LEFT JOIN message_deletions md ON md.message_id = m.id AND md.user_id = $2
 		LEFT JOIN messages rt ON rt.id = m.reply_to_message_id
+		LEFT JOIN statuses rs ON rs.id = m.reply_to_status_id
 		WHERE m.conversation_id = $1
 		  AND md.id IS NULL
 		ORDER BY m.created_at ASC
@@ -398,10 +469,17 @@ func (r *ConversationRepository) ListMessages(
 	for rows.Next() {
 		var message models.Message
 		var replyToMessageID *string
+		var replyToStatusID *string
 		var replyToID *string
 		var replyToSenderID *string
 		var replyToContent *string
 		var replyToIsUnsent *bool
+		var statusReplyID *string
+		var statusReplyOwnerID *string
+		var statusReplyType *string
+		var statusReplyContent *string
+		var statusReplyImageURL *string
+		var statusReplyBackgroundColor *string
 
 		if err := rows.Scan(
 			&message.ID,
@@ -412,6 +490,7 @@ func (r *ConversationRepository) ListMessages(
 			&message.IsEdited,
 			&message.IsUnsent,
 			&replyToMessageID,
+			&replyToStatusID,
 			&message.DeliveredAt,
 			&message.CreatedAt,
 			&message.UpdatedAt,
@@ -419,16 +498,31 @@ func (r *ConversationRepository) ListMessages(
 			&replyToSenderID,
 			&replyToContent,
 			&replyToIsUnsent,
+			&statusReplyID,
+			&statusReplyOwnerID,
+			&statusReplyType,
+			&statusReplyContent,
+			&statusReplyImageURL,
+			&statusReplyBackgroundColor,
 		); err != nil {
 			return nil, err
 		}
 
 		message.ReplyToMessageID = replyToMessageID
+		message.ReplyToStatusID = replyToStatusID
 		message.ReplyTo = scanMessageReplyTo(
 			replyToID,
 			replyToSenderID,
 			replyToContent,
 			replyToIsUnsent,
+		)
+		message.ReplyToStatus = scanMessageReplyToStatus(
+			statusReplyID,
+			statusReplyOwnerID,
+			statusReplyType,
+			statusReplyContent,
+			statusReplyImageURL,
+			statusReplyBackgroundColor,
 		)
 
 		messages = append(messages, message)
@@ -445,6 +539,233 @@ func (r *ConversationRepository) ListMessages(
 	return messages, nil
 }
 
+func (r *ConversationRepository) GetFriends(
+	ctx context.Context,
+	userID uuid.UUID,
+) ([]models.FriendResponse, error) {
+	const query = `
+		SELECT
+			u.id,
+			u.full_name,
+			u.username,
+			u.avatar_url,
+			u.is_online,
+			c.id
+		FROM conversations c
+		JOIN conversation_members cm_self
+			ON cm_self.conversation_id = c.id
+			AND cm_self.user_id = $1
+		JOIN conversation_members cm_other
+			ON cm_other.conversation_id = c.id
+			AND cm_other.user_id <> $1
+		JOIN users u ON u.id = cm_other.user_id
+		WHERE c.type = $2
+		  AND c.status = $3
+		  AND u.is_deleted = FALSE
+		ORDER BY u.full_name ASC`
+
+	rows, err := r.db.Query(
+		ctx,
+		query,
+		userID.String(),
+		models.ConversationTypeDirect,
+		models.ConversationStatusAccepted,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	friends := make([]models.FriendResponse, 0)
+	for rows.Next() {
+		var friend models.FriendResponse
+
+		if err := rows.Scan(
+			&friend.ID,
+			&friend.FullName,
+			&friend.Username,
+			&friend.AvatarURL,
+			&friend.IsOnline,
+			&friend.ConversationID,
+		); err != nil {
+			return nil, err
+		}
+
+		friends = append(friends, friend)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return friends, nil
+}
+
+func (r *ConversationRepository) ClearChatForUser(
+	ctx context.Context,
+	conversationID, userID uuid.UUID,
+) error {
+	const query = `
+		INSERT INTO message_deletions (message_id, user_id)
+		SELECT m.id, $2
+		FROM messages m
+		WHERE m.conversation_id = $1
+		ON CONFLICT (message_id, user_id) DO NOTHING`
+
+	_, err := r.db.Exec(ctx, query, conversationID.String(), userID.String())
+	return err
+}
+
+func (r *ConversationRepository) GetConversationHeaderInfo(
+	ctx context.Context,
+	conversationID, requestingUserID uuid.UUID,
+) (*models.ConversationHeaderInfo, error) {
+	conversation, err := r.GetByID(ctx, conversationID)
+	if errors.Is(err, ErrNotFound) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	isParticipant, err := r.IsParticipant(ctx, conversationID, requestingUserID)
+	if err != nil {
+		return nil, err
+	}
+	if !isParticipant {
+		return nil, ErrForbidden
+	}
+
+	info := &models.ConversationHeaderInfo{
+		Type: conversation.Type,
+	}
+
+	switch conversation.Type {
+	case models.ConversationTypeDirect:
+		const directQuery = `
+			SELECT
+				u.id,
+				u.full_name,
+				u.username,
+				u.avatar_url,
+				u.is_online,
+				u.last_seen,
+				u.is_deleted
+			FROM conversation_members cm
+			JOIN users u ON u.id = cm.user_id
+			WHERE cm.conversation_id = $1
+			  AND cm.user_id <> $2
+			LIMIT 1`
+
+		var (
+			participantID       string
+			participantFullName string
+			participantUsername string
+			participantAvatar   *string
+			participantIsOnline bool
+			participantLastSeen *time.Time
+			isDeleted           bool
+		)
+
+		err := r.db.QueryRow(
+			ctx,
+			directQuery,
+			conversationID.String(),
+			requestingUserID.String(),
+		).Scan(
+			&participantID,
+			&participantFullName,
+			&participantUsername,
+			&participantAvatar,
+			&participantIsOnline,
+			&participantLastSeen,
+			&isDeleted,
+		)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		if isDeleted {
+			participantFullName = models.DeletedUserDisplayName
+			participantUsername = ""
+			participantAvatar = nil
+			participantIsOnline = false
+			participantLastSeen = nil
+		}
+
+		info.ParticipantID = &participantID
+		info.ParticipantFullName = &participantFullName
+		if participantUsername != "" {
+			info.ParticipantUsername = &participantUsername
+		}
+		info.ParticipantAvatarURL = participantAvatar
+		info.ParticipantIsOnline = &participantIsOnline
+		info.ParticipantLastSeen = participantLastSeen
+
+	case models.ConversationTypeGroup:
+		const groupQuery = `
+			SELECT
+				c.name,
+				c.avatar_url,
+				COUNT(cm.user_id)::int
+			FROM conversations c
+			JOIN conversation_members cm ON cm.conversation_id = c.id
+			WHERE c.id = $1
+			GROUP BY c.id, c.name, c.avatar_url`
+
+		var (
+			groupName      *string
+			groupAvatarURL *string
+			memberCount    int
+		)
+
+		err := r.db.QueryRow(ctx, groupQuery, conversationID.String()).Scan(
+			&groupName,
+			&groupAvatarURL,
+			&memberCount,
+		)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		info.GroupName = groupName
+		info.GroupAvatarURL = groupAvatarURL
+		info.MemberCount = &memberCount
+	}
+
+	const selfBackgroundQuery = `
+		SELECT background_type, background_value
+		FROM conversation_members
+		WHERE conversation_id = $1 AND user_id = $2`
+
+	var backgroundType string
+	var backgroundValue *string
+
+	err = r.db.QueryRow(
+		ctx,
+		selfBackgroundQuery,
+		conversationID.String(),
+		requestingUserID.String(),
+	).Scan(&backgroundType, &backgroundValue)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	info.BackgroundType = backgroundType
+	info.BackgroundValue = backgroundValue
+
+	return info, nil
+}
+
 func (r *ConversationRepository) TouchConversation(
 	ctx context.Context,
 	conversationID uuid.UUID,
@@ -455,6 +776,136 @@ func (r *ConversationRepository) TouchConversation(
 		WHERE id = $1`
 
 	tag, err := r.db.Exec(ctx, query, conversationID.String())
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+
+	return nil
+}
+
+func (r *ConversationRepository) PinConversation(
+	ctx context.Context,
+	userID, conversationID uuid.UUID,
+) error {
+	const query = `
+		UPDATE conversation_members
+		SET is_pinned = TRUE, pinned_at = NOW()
+		WHERE conversation_id = $1 AND user_id = $2`
+
+	tag, err := r.db.Exec(ctx, query, conversationID.String(), userID.String())
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+
+	return nil
+}
+
+func (r *ConversationRepository) UnpinConversation(
+	ctx context.Context,
+	userID, conversationID uuid.UUID,
+) error {
+	const query = `
+		UPDATE conversation_members
+		SET is_pinned = FALSE, pinned_at = NULL
+		WHERE conversation_id = $1 AND user_id = $2`
+
+	tag, err := r.db.Exec(ctx, query, conversationID.String(), userID.String())
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+
+	return nil
+}
+
+func (r *ConversationRepository) GetPinnedCount(
+	ctx context.Context,
+	userID uuid.UUID,
+) (int, error) {
+	const query = `
+		SELECT COUNT(*)
+		FROM conversation_members
+		WHERE user_id = $1 AND is_pinned = TRUE`
+
+	var count int
+
+	err := r.db.QueryRow(ctx, query, userID.String()).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+
+	return count, nil
+}
+
+func (r *ConversationRepository) IsConversationPinned(
+	ctx context.Context,
+	userID, conversationID uuid.UUID,
+) (bool, error) {
+	const query = `
+		SELECT is_pinned
+		FROM conversation_members
+		WHERE conversation_id = $1 AND user_id = $2`
+
+	var isPinned bool
+
+	err := r.db.QueryRow(ctx, query, conversationID.String(), userID.String()).Scan(&isPinned)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, ErrNotFound
+	}
+	if err != nil {
+		return false, err
+	}
+
+	return isPinned, nil
+}
+
+func (r *ConversationRepository) SetConversationBackground(
+	ctx context.Context,
+	userID, conversationID uuid.UUID,
+	backgroundType string,
+	backgroundValue *string,
+) error {
+	const query = `
+		UPDATE conversation_members
+		SET background_type = $3, background_value = $4
+		WHERE conversation_id = $1 AND user_id = $2`
+
+	tag, err := r.db.Exec(
+		ctx,
+		query,
+		conversationID.String(),
+		userID.String(),
+		backgroundType,
+		backgroundValue,
+	)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+
+	return nil
+}
+
+func (r *ConversationRepository) ResetConversationBackground(
+	ctx context.Context,
+	userID, conversationID uuid.UUID,
+) error {
+	const query = `
+		UPDATE conversation_members
+		SET background_type = 'default', background_value = NULL
+		WHERE conversation_id = $1 AND user_id = $2`
+
+	tag, err := r.db.Exec(ctx, query, conversationID.String(), userID.String())
 	if err != nil {
 		return err
 	}

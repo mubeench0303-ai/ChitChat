@@ -28,7 +28,9 @@ func main() {
 		log.Fatalf("failed to load config: %v", err)
 	}
 
-	ctx := context.Background()
+	ctx, stopBackgroundJobs := context.WithCancel(context.Background())
+	defer stopBackgroundJobs()
+
 	pool, err := database.NewPostgresPool(ctx, cfg)
 	if err != nil {
 		log.Fatalf("failed to connect to database: %v", err)
@@ -38,6 +40,7 @@ func main() {
 	userRepo := repository.NewUserRepository(pool)
 	verificationRepo := repository.NewVerificationRepository(pool)
 	conversationRepo := repository.NewConversationRepository(pool)
+	statusRepo := repository.NewStatusRepository(pool)
 	mailer := email.NewClient(
 		cfg.SMTPHost,
 		cfg.SMTPPort,
@@ -66,11 +69,16 @@ func main() {
 	conversationService := service.NewConversationService(
 		userRepo,
 		conversationRepo,
+		statusRepo,
 		notificationService,
 		cloudinaryClient,
+		authService,
 	)
+	statusService := service.NewStatusService(statusRepo, userRepo, authService)
+	statusService.StartCleanupJob(ctx)
 	authHandler := handler.NewAuthHandler(authService, userRepo)
-	conversationHandler := handler.NewConversationHandler(conversationService)
+	conversationHandler := handler.NewConversationHandler(conversationService, cloudinaryClient)
+	statusHandler := handler.NewStatusHandler(statusService, cloudinaryClient)
 	authMiddleware := middleware.NewAuthMiddleware(jwtHelper)
 
 	allowedOrigins, err := cfg.AllowedOrigins()
@@ -88,7 +96,9 @@ func main() {
 		Handler: router.New(
 			authHandler,
 			conversationHandler,
+			statusHandler,
 			conversationService,
+			authService,
 			authMiddleware,
 			hub,
 			jwtHelper,
@@ -112,6 +122,8 @@ func main() {
 	<-quit
 
 	log.Println("shutting down server...")
+
+	stopBackgroundJobs()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

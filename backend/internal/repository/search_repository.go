@@ -92,31 +92,74 @@ func (r *UserRepository) SearchByUsername(
 
 func (r *UserRepository) GetPublicProfileByUsername(
 	ctx context.Context,
+	viewerID uuid.UUID,
 	username string,
-) (*models.User, error) {
+) (*models.User, string, *string, error) {
 	const query = `
-		SELECT id, full_name, username, bio, avatar_url, is_deleted
-		FROM users
-		WHERE LOWER(username) = LOWER($1)`
+		SELECT
+			u.id,
+			u.full_name,
+			u.username,
+			u.bio,
+			u.avatar_url,
+			u.is_deleted,
+			c.id,
+			c.status
+		FROM users u
+		LEFT JOIN conversations c
+			ON c.type = $3
+			AND c.direct_pair_key = (
+				CASE
+					WHEN u.id::text < $2::text THEN u.id::text || '_' || $2::text
+					ELSE $2::text || '_' || u.id::text
+				END
+			)
+		WHERE LOWER(u.username) = LOWER($1)`
 
 	var user models.User
+	var conversationID *string
+	var conversationStatus *string
 
-	err := r.db.QueryRow(ctx, query, strings.TrimSpace(username)).Scan(
+	err := r.db.QueryRow(
+		ctx,
+		query,
+		strings.TrimSpace(username),
+		viewerID.String(),
+		models.ConversationTypeDirect,
+	).Scan(
 		&user.ID,
 		&user.FullName,
 		&user.Username,
 		&user.Bio,
 		&user.AvatarURL,
 		&user.IsDeleted,
+		&conversationID,
+		&conversationStatus,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
+		return nil, "", nil, ErrNotFound
 	}
 	if err != nil {
-		return nil, err
+		return nil, "", nil, err
 	}
 
-	return &user, nil
+	relationshipStatus := models.RelationshipStatusNone
+	if conversationID != nil && *conversationID != "" {
+		if conversationStatus != nil {
+			switch *conversationStatus {
+			case models.ConversationStatusPending:
+				relationshipStatus = models.RelationshipStatusPending
+			case models.ConversationStatusAccepted:
+				relationshipStatus = models.RelationshipStatusAccepted
+			case models.ConversationStatusBlocked:
+				relationshipStatus = models.RelationshipStatusBlocked
+			}
+		}
+	} else {
+		conversationID = nil
+	}
+
+	return &user, relationshipStatus, conversationID, nil
 }
 
 func escapeLikePattern(value string) string {

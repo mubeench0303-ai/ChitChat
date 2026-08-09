@@ -26,7 +26,243 @@ const (
 	unsendWindowDuration     = 1 * time.Hour
 	unsentMessagePlaceholder = "This message was unsent"
 	defaultMessageListLimit  = 50
+	maxPinnedChats           = 3
 )
+
+func (s *ConversationService) GetConversationHeaderInfo(
+	ctx context.Context,
+	userID, conversationID uuid.UUID,
+) (*models.ConversationHeaderInfo, error) {
+	info, err := s.conversations.GetConversationHeaderInfo(ctx, conversationID, userID)
+	if errors.Is(err, repository.ErrNotFound) {
+		return nil, ErrConversationNotFound
+	}
+	if errors.Is(err, repository.ErrForbidden) {
+		return nil, ErrNotAuthorized
+	}
+	if err != nil {
+		return nil, fmt.Errorf("conversation: failed to get header info: %w", err)
+	}
+
+	if s.privacy != nil &&
+		info.Type == models.ConversationTypeDirect &&
+		info.ParticipantID != nil {
+		participantID, parseErr := uuid.Parse(*info.ParticipantID)
+		if parseErr != nil {
+			return nil, fmt.Errorf("conversation: invalid participant id: %w", parseErr)
+		}
+
+		canViewOnline, privacyErr := s.privacy.CanView(
+			ctx,
+			userID,
+			participantID,
+			models.PrivacyFieldOnlineStatus,
+		)
+		if privacyErr != nil {
+			return nil, fmt.Errorf("conversation: failed to check online privacy: %w", privacyErr)
+		}
+		if !canViewOnline && info.ParticipantIsOnline != nil {
+			isOnline := false
+			info.ParticipantIsOnline = &isOnline
+		}
+
+		canViewLastSeen, privacyErr := s.privacy.CanView(
+			ctx,
+			userID,
+			participantID,
+			models.PrivacyFieldLastSeen,
+		)
+		if privacyErr != nil {
+			return nil, fmt.Errorf("conversation: failed to check last seen privacy: %w", privacyErr)
+		}
+		if !canViewLastSeen {
+			info.ParticipantLastSeen = nil
+		}
+	}
+
+	return info, nil
+}
+
+func (s *ConversationService) GetFriends(
+	ctx context.Context,
+	userID uuid.UUID,
+) ([]models.FriendResponse, error) {
+	friends, err := s.conversations.GetFriends(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("conversation: failed to list friends: %w", err)
+	}
+
+	if friends == nil {
+		friends = []models.FriendResponse{}
+	}
+
+	return friends, nil
+}
+
+func (s *ConversationService) ClearChat(
+	ctx context.Context,
+	actingUserID, conversationID uuid.UUID,
+) error {
+	isParticipant, err := s.conversations.IsParticipant(ctx, conversationID, actingUserID)
+	if err != nil {
+		return fmt.Errorf("conversation: failed to check participant: %w", err)
+	}
+	if !isParticipant {
+		return ErrNotAuthorized
+	}
+
+	conversation, err := s.conversations.GetByID(ctx, conversationID)
+	if errors.Is(err, repository.ErrNotFound) {
+		return ErrConversationNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("conversation: failed to fetch conversation: %w", err)
+	}
+
+	if conversation.Type != models.ConversationTypeDirect {
+		return ErrNotAuthorized
+	}
+
+	if err := s.conversations.ClearChatForUser(ctx, conversationID, actingUserID); err != nil {
+		return fmt.Errorf("conversation: failed to clear chat: %w", err)
+	}
+
+	return nil
+}
+
+func (s *ConversationService) PinChat(
+	ctx context.Context,
+	userID, conversationID uuid.UUID,
+) error {
+	isParticipant, err := s.conversations.IsParticipant(ctx, conversationID, userID)
+	if err != nil {
+		return fmt.Errorf("conversation: failed to check participant: %w", err)
+	}
+	if !isParticipant {
+		return ErrNotAuthorized
+	}
+
+	alreadyPinned, err := s.conversations.IsConversationPinned(ctx, userID, conversationID)
+	if errors.Is(err, repository.ErrNotFound) {
+		return ErrNotAuthorized
+	}
+	if err != nil {
+		return fmt.Errorf("conversation: failed to check pin state: %w", err)
+	}
+
+	if !alreadyPinned {
+		count, err := s.conversations.GetPinnedCount(ctx, userID)
+		if err != nil {
+			return fmt.Errorf("conversation: failed to count pinned chats: %w", err)
+		}
+		if count >= maxPinnedChats {
+			return ErrPinLimitReached
+		}
+	}
+
+	if err := s.conversations.PinConversation(ctx, userID, conversationID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return ErrNotAuthorized
+		}
+		return fmt.Errorf("conversation: failed to pin chat: %w", err)
+	}
+
+	return nil
+}
+
+func (s *ConversationService) UnpinChat(
+	ctx context.Context,
+	userID, conversationID uuid.UUID,
+) error {
+	isParticipant, err := s.conversations.IsParticipant(ctx, conversationID, userID)
+	if err != nil {
+		return fmt.Errorf("conversation: failed to check participant: %w", err)
+	}
+	if !isParticipant {
+		return ErrNotAuthorized
+	}
+
+	if err := s.conversations.UnpinConversation(ctx, userID, conversationID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return ErrNotAuthorized
+		}
+		return fmt.Errorf("conversation: failed to unpin chat: %w", err)
+	}
+
+	return nil
+}
+
+func (s *ConversationService) SetBackground(
+	ctx context.Context,
+	userID, conversationID uuid.UUID,
+	backgroundType, backgroundValue string,
+) error {
+	isParticipant, err := s.conversations.IsParticipant(ctx, conversationID, userID)
+	if err != nil {
+		return fmt.Errorf("conversation: failed to check participant: %w", err)
+	}
+	if !isParticipant {
+		return ErrNotAuthorized
+	}
+
+	backgroundType = strings.TrimSpace(backgroundType)
+	backgroundValue = strings.TrimSpace(backgroundValue)
+
+	switch backgroundType {
+	case BackgroundTypePreset:
+		if _, ok := allowedBackgroundPresets[backgroundValue]; !ok {
+			return ErrInvalidBackgroundPreset
+		}
+	case BackgroundTypeCustom:
+		if backgroundValue == "" {
+			return ErrInvalidBackgroundValue
+		}
+	default:
+		return ErrInvalidBackgroundType
+	}
+
+	var valuePtr *string
+	if backgroundValue != "" {
+		valuePtr = &backgroundValue
+	}
+
+	if err := s.conversations.SetConversationBackground(
+		ctx,
+		userID,
+		conversationID,
+		backgroundType,
+		valuePtr,
+	); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return ErrNotAuthorized
+		}
+		return fmt.Errorf("conversation: failed to set background: %w", err)
+	}
+
+	return nil
+}
+
+func (s *ConversationService) ResetBackground(
+	ctx context.Context,
+	userID, conversationID uuid.UUID,
+) error {
+	isParticipant, err := s.conversations.IsParticipant(ctx, conversationID, userID)
+	if err != nil {
+		return fmt.Errorf("conversation: failed to check participant: %w", err)
+	}
+	if !isParticipant {
+		return ErrNotAuthorized
+	}
+
+	if err := s.conversations.ResetConversationBackground(ctx, userID, conversationID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return ErrNotAuthorized
+		}
+		return fmt.Errorf("conversation: failed to reset background: %w", err)
+	}
+
+	return nil
+}
 
 func (s *ConversationService) GetChatList(
 	ctx context.Context,
@@ -277,6 +513,7 @@ func (s *ConversationService) SendChatMessage(
 	userID, conversationID uuid.UUID,
 	content string,
 	replyToMessageID *uuid.UUID,
+	replyToStatusID *uuid.UUID,
 	imageFile multipart.File,
 	imageFilename string,
 ) (*models.Message, error) {
@@ -357,6 +594,10 @@ func (s *ConversationService) SendChatMessage(
 	}
 
 	var replyTarget *models.Message
+	if replyToMessageID != nil && replyToStatusID != nil {
+		return nil, ErrInvalidReplyTarget
+	}
+
 	if replyToMessageID != nil {
 		replyTarget, err = s.conversations.GetMessageByID(ctx, *replyToMessageID)
 		if errors.Is(err, repository.ErrNotFound) {
@@ -370,12 +611,55 @@ func (s *ConversationService) SendChatMessage(
 		}
 	}
 
+	var replyStatusTarget *models.Status
+	if replyToStatusID != nil {
+		if s.statuses == nil {
+			return nil, ErrInvalidStatusReplyTarget
+		}
+
+		replyStatusTarget, err = s.statuses.GetStatusByID(ctx, *replyToStatusID)
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, ErrInvalidStatusReplyTarget
+		}
+		if err != nil {
+			return nil, fmt.Errorf("conversation: failed to get status reply target: %w", err)
+		}
+
+		statusOwnerID, parseErr := uuid.Parse(replyStatusTarget.UserID)
+		if parseErr != nil {
+			return nil, ErrInvalidStatusReplyTarget
+		}
+
+		isOwnerParticipant, participantErr := s.conversations.IsParticipant(
+			ctx,
+			conversationID,
+			statusOwnerID,
+		)
+		if participantErr != nil {
+			return nil, fmt.Errorf("conversation: failed to check status owner participant: %w", participantErr)
+		}
+		if !isOwnerParticipant {
+			return nil, ErrInvalidStatusReplyTarget
+		}
+
+		if conversation.Type == models.ConversationTypeDirect {
+			otherUserID, otherErr := s.conversations.GetOtherParticipantID(ctx, conversationID, userID)
+			if otherErr != nil {
+				return nil, fmt.Errorf("conversation: failed to resolve other participant: %w", otherErr)
+			}
+			if statusOwnerID != otherUserID {
+				return nil, ErrInvalidStatusReplyTarget
+			}
+		}
+	}
+
 	message, err := s.conversations.CreateMessage(
 		ctx,
 		conversationID,
 		userID,
 		trimmedContent,
 		replyToMessageID,
+		replyToStatusID,
 		imageURL,
 	)
 	if err != nil {
@@ -389,6 +673,17 @@ func (s *ConversationService) SendChatMessage(
 			SenderID: replyTarget.SenderID,
 			Content:  replyTarget.Content,
 			IsUnsent: replyTarget.IsUnsent,
+		}
+	}
+
+	if replyStatusTarget != nil {
+		message.ReplyToStatus = &models.MessageReplyToStatus{
+			ID:              replyStatusTarget.ID,
+			OwnerID:         replyStatusTarget.UserID,
+			Type:            replyStatusTarget.Type,
+			Content:         replyStatusTarget.Content,
+			ImageURL:        replyStatusTarget.ImageURL,
+			BackgroundColor: replyStatusTarget.BackgroundColor,
 		}
 	}
 
@@ -503,6 +798,9 @@ func messageToNotificationPayload(message *models.Message, senderName string) ma
 	if message.ReplyToMessageID != nil {
 		payload["replyToMessageId"] = *message.ReplyToMessageID
 	}
+	if message.ReplyToStatusID != nil {
+		payload["replyToStatusId"] = *message.ReplyToStatusID
+	}
 	if message.ImageURL != nil {
 		payload["imageUrl"] = *message.ImageURL
 	}
@@ -512,6 +810,16 @@ func messageToNotificationPayload(message *models.Message, senderName string) ma
 			"senderId": message.ReplyTo.SenderID,
 			"content":  message.ReplyTo.Content,
 			"isUnsent": message.ReplyTo.IsUnsent,
+		}
+	}
+	if message.ReplyToStatus != nil {
+		payload["replyToStatus"] = map[string]interface{}{
+			"id":              message.ReplyToStatus.ID,
+			"ownerId":         message.ReplyToStatus.OwnerID,
+			"type":            message.ReplyToStatus.Type,
+			"content":         message.ReplyToStatus.Content,
+			"imageUrl":        message.ReplyToStatus.ImageURL,
+			"backgroundColor": message.ReplyToStatus.BackgroundColor,
 		}
 	}
 	if message.TickStatus != nil {
