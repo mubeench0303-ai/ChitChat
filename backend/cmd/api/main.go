@@ -42,12 +42,12 @@ func main() {
 	conversationRepo := repository.NewConversationRepository(pool)
 	statusRepo := repository.NewStatusRepository(pool)
 	mailer := email.NewClient(
-		cfg.SMTPHost,
-		cfg.SMTPPort,
-		cfg.SMTPEmail,
-		cfg.SMTPPassword,
-		cfg.SMTPFrom,
-		cfg.SMTPFromName,
+		cfg.PingramAPIKey,
+		cfg.PingramRegion,
+		cfg.PingramFromName,
+		cfg.PingramFromAddress,
+		cfg.PingramEmailVerifyType,
+		cfg.PingramPasswordResetType,
 	)
 	jwtHelper := jwt.NewHelper(cfg.JWTSecret, 24*time.Hour)
 	cloudinaryClient := cloudinary.NewClient(

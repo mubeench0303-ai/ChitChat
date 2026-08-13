@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"mime/multipart"
 	"net/http"
 	"strings"
@@ -19,9 +20,12 @@ import (
 )
 
 const (
-	maxMessageContentLength  = 2000
-	maxMessageImageSizeBytes = 5 << 20
-	messageImageUploadFolder = "chitchat/messages"
+	maxMessageContentLength        = 2000
+	maxMessageImageSizeBytes       = 5 << 20
+	maxMessageVoiceSizeBytes       = 10 << 20
+	maxMessageVoiceDurationSeconds = 300
+	messageImageUploadFolder       = "chitchat/messages"
+	messageVoiceUploadFolder       = "chitchat/voice-messages"
 	editWindowDuration       = 10 * time.Minute
 	unsendWindowDuration     = 1 * time.Hour
 	unsentMessagePlaceholder = "This message was unsent"
@@ -44,43 +48,67 @@ func (s *ConversationService) GetConversationHeaderInfo(
 		return nil, fmt.Errorf("conversation: failed to get header info: %w", err)
 	}
 
-	if s.privacy != nil &&
-		info.Type == models.ConversationTypeDirect &&
-		info.ParticipantID != nil {
+	if info.Type == models.ConversationTypeDirect && info.ParticipantID != nil {
 		participantID, parseErr := uuid.Parse(*info.ParticipantID)
 		if parseErr != nil {
 			return nil, fmt.Errorf("conversation: invalid participant id: %w", parseErr)
 		}
 
-		canViewOnline, privacyErr := s.privacy.CanView(
+		avatarURL := info.ParticipantAvatarURL
+		isOnline := info.ParticipantIsOnline
+		lastSeen := info.ParticipantLastSeen
+		if privacyErr := s.applyDirectParticipantPrivacy(
 			ctx,
 			userID,
 			participantID,
-			models.PrivacyFieldOnlineStatus,
-		)
-		if privacyErr != nil {
-			return nil, fmt.Errorf("conversation: failed to check online privacy: %w", privacyErr)
-		}
-		if !canViewOnline && info.ParticipantIsOnline != nil {
-			isOnline := false
-			info.ParticipantIsOnline = &isOnline
+			&avatarURL,
+			&isOnline,
+			&lastSeen,
+		); privacyErr != nil {
+			return nil, privacyErr
 		}
 
-		canViewLastSeen, privacyErr := s.privacy.CanView(
-			ctx,
-			userID,
-			participantID,
-			models.PrivacyFieldLastSeen,
-		)
-		if privacyErr != nil {
-			return nil, fmt.Errorf("conversation: failed to check last seen privacy: %w", privacyErr)
-		}
-		if !canViewLastSeen {
-			info.ParticipantLastSeen = nil
-		}
+		info.ParticipantAvatarURL = avatarURL
+		info.ParticipantIsOnline = isOnline
+		info.ParticipantLastSeen = lastSeen
 	}
 
 	return info, nil
+}
+
+func (s *ConversationService) applyDirectParticipantPrivacy(
+	ctx context.Context,
+	viewerID, targetID uuid.UUID,
+	avatarURL **string,
+	isOnline **bool,
+	lastSeen **time.Time,
+) error {
+	if s.privacy == nil {
+		return nil
+	}
+
+	canViewPhoto, err := s.privacy.CanView(ctx, viewerID, targetID, models.PrivacyFieldProfilePhoto)
+	if err != nil {
+		return fmt.Errorf("conversation: failed to check profile photo privacy: %w", err)
+	}
+	if !canViewPhoto && avatarURL != nil {
+		*avatarURL = nil
+	}
+
+	canViewPresence, err := s.privacy.CanView(ctx, viewerID, targetID, models.PrivacyFieldLastSeenAndOnline)
+	if err != nil {
+		return fmt.Errorf("conversation: failed to check presence privacy: %w", err)
+	}
+	if !canViewPresence {
+		if isOnline != nil {
+			*isOnline = nil
+		}
+		if lastSeen != nil {
+			*lastSeen = nil
+		}
+	}
+
+	return nil
 }
 
 func (s *ConversationService) GetFriends(
@@ -94,6 +122,29 @@ func (s *ConversationService) GetFriends(
 
 	if friends == nil {
 		friends = []models.FriendResponse{}
+	}
+
+	for i := range friends {
+		targetID, parseErr := uuid.Parse(friends[i].ID)
+		if parseErr != nil {
+			continue
+		}
+
+		avatarURL := friends[i].AvatarURL
+		isOnline := friends[i].IsOnline
+		if privacyErr := s.applyDirectParticipantPrivacy(
+			ctx,
+			userID,
+			targetID,
+			&avatarURL,
+			&isOnline,
+			nil,
+		); privacyErr != nil {
+			return nil, privacyErr
+		}
+
+		friends[i].AvatarURL = avatarURL
+		friends[i].IsOnline = isOnline
 	}
 
 	return friends, nil
@@ -192,6 +243,50 @@ func (s *ConversationService) UnpinChat(
 	return nil
 }
 
+func (s *ConversationService) MuteChat(
+	ctx context.Context,
+	userID, conversationID uuid.UUID,
+) error {
+	isParticipant, err := s.conversations.IsParticipant(ctx, conversationID, userID)
+	if err != nil {
+		return fmt.Errorf("conversation: failed to check participant: %w", err)
+	}
+	if !isParticipant {
+		return ErrNotAuthorized
+	}
+
+	if err := s.conversations.MuteConversation(ctx, userID, conversationID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return ErrNotAuthorized
+		}
+		return fmt.Errorf("conversation: failed to mute chat: %w", err)
+	}
+
+	return nil
+}
+
+func (s *ConversationService) UnmuteChat(
+	ctx context.Context,
+	userID, conversationID uuid.UUID,
+) error {
+	isParticipant, err := s.conversations.IsParticipant(ctx, conversationID, userID)
+	if err != nil {
+		return fmt.Errorf("conversation: failed to check participant: %w", err)
+	}
+	if !isParticipant {
+		return ErrNotAuthorized
+	}
+
+	if err := s.conversations.UnmuteConversation(ctx, userID, conversationID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return ErrNotAuthorized
+		}
+		return fmt.Errorf("conversation: failed to unmute chat: %w", err)
+	}
+
+	return nil
+}
+
 func (s *ConversationService) SetBackground(
 	ctx context.Context,
 	userID, conversationID uuid.UUID,
@@ -275,6 +370,33 @@ func (s *ConversationService) GetChatList(
 
 	for i := range conversations {
 		scrubConversationPreview(&conversations[i])
+
+		if conversations[i].Type != models.ConversationTypeDirect {
+			continue
+		}
+
+		targetID, parseErr := uuid.Parse(conversations[i].RequesterID)
+		if parseErr != nil {
+			continue
+		}
+
+		avatarURL := conversations[i].RequesterAvatarURL
+		isOnline := conversations[i].RequesterIsOnline
+		lastSeen := conversations[i].RequesterLastSeen
+		if privacyErr := s.applyDirectParticipantPrivacy(
+			ctx,
+			userID,
+			targetID,
+			&avatarURL,
+			&isOnline,
+			&lastSeen,
+		); privacyErr != nil {
+			return nil, privacyErr
+		}
+
+		conversations[i].RequesterAvatarURL = avatarURL
+		conversations[i].RequesterIsOnline = isOnline
+		conversations[i].RequesterLastSeen = lastSeen
 	}
 
 	return conversations, nil
@@ -415,6 +537,13 @@ func (s *ConversationService) EditMessage(
 		return nil, ErrNotAuthorized
 	}
 
+	if message.Type == models.MessageTypeImage ||
+		message.Type == models.MessageTypeVoice ||
+		message.ImageURL != nil ||
+		message.AudioURL != nil {
+		return nil, ErrMessageNotEditable
+	}
+
 	if time.Since(message.CreatedAt) > editWindowDuration {
 		return nil, ErrEditWindowExpired
 	}
@@ -481,6 +610,16 @@ func (s *ConversationService) UnsendMessage(
 
 		if err := s.cloudinary.DeleteImage(ctx, *message.ImageURL); err != nil {
 			return fmt.Errorf("conversation: failed to delete message image: %w", err)
+		}
+	}
+
+	if message.AudioURL != nil && strings.TrimSpace(*message.AudioURL) != "" {
+		if s.cloudinary == nil {
+			return fmt.Errorf("conversation: voice delete is not configured")
+		}
+
+		if err := s.cloudinary.DeleteVideo(ctx, *message.AudioURL); err != nil {
+			return fmt.Errorf("conversation: failed to delete message voice: %w", err)
 		}
 	}
 
@@ -668,12 +807,7 @@ func (s *ConversationService) SendChatMessage(
 
 	if replyTarget != nil {
 		scrubMessage(replyTarget)
-		message.ReplyTo = &models.MessageReplyTo{
-			ID:       replyTarget.ID,
-			SenderID: replyTarget.SenderID,
-			Content:  replyTarget.Content,
-			IsUnsent: replyTarget.IsUnsent,
-		}
+		message.ReplyTo = messageToReplyTo(replyTarget)
 	}
 
 	if replyStatusTarget != nil {
@@ -770,10 +904,279 @@ func (s *ConversationService) SendChatMessage(
 	return message, nil
 }
 
+func (s *ConversationService) SendVoiceMessage(
+	ctx context.Context,
+	userID, conversationID uuid.UUID,
+	replyToMessageID *uuid.UUID,
+	replyToStatusID *uuid.UUID,
+	audioFile multipart.File,
+	audioFilename string,
+	clientDurationSeconds int,
+) (*models.Message, error) {
+	isParticipant, err := s.conversations.IsParticipant(ctx, conversationID, userID)
+	if err != nil {
+		return nil, fmt.Errorf("conversation: failed to check participant: %w", err)
+	}
+	if !isParticipant {
+		return nil, ErrNotAuthorized
+	}
+
+	conversation, err := s.conversations.GetByID(ctx, conversationID)
+	if errors.Is(err, repository.ErrNotFound) {
+		return nil, ErrConversationNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("conversation: failed to fetch conversation: %w", err)
+	}
+
+	if conversation.Type == models.ConversationTypeDirect {
+		if conversation.Status == nil || *conversation.Status != models.ConversationStatusAccepted {
+			return nil, ErrConversationNotAccepted
+		}
+
+		otherUserID, err := s.conversations.GetOtherParticipantID(ctx, conversationID, userID)
+		if err != nil {
+			return nil, fmt.Errorf("conversation: failed to resolve other participant: %w", err)
+		}
+
+		otherUser, err := s.users.GetUserByID(ctx, otherUserID.String())
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, ErrRecipientNoLongerExists
+		}
+		if err != nil {
+			return nil, fmt.Errorf("conversation: failed to load other participant: %w", err)
+		}
+
+		if otherUser.IsDeleted {
+			return nil, ErrRecipientNoLongerExists
+		}
+	}
+
+	if err := validateMessageVoiceFile(audioFile); err != nil {
+		return nil, err
+	}
+
+	if s.cloudinary == nil {
+		return nil, fmt.Errorf("conversation: voice upload is not configured")
+	}
+
+	uploadResult, err := s.cloudinary.UploadVideo(
+		ctx,
+		audioFile,
+		audioFilename,
+		messageVoiceUploadFolder,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("conversation: failed to upload voice message: %w", err)
+	}
+
+	durationSeconds := clientDurationSeconds
+	if uploadResult.Duration > 0 {
+		durationSeconds = int(math.Round(uploadResult.Duration))
+	}
+
+	if durationSeconds <= 0 {
+		return nil, ErrInvalidMessageVoiceContentType
+	}
+
+	if durationSeconds > maxMessageVoiceDurationSeconds {
+		return nil, ErrMessageVoiceTooLong
+	}
+
+	if replyToMessageID != nil && replyToStatusID != nil {
+		return nil, ErrInvalidReplyTarget
+	}
+
+	var replyTarget *models.Message
+	if replyToMessageID != nil {
+		replyTarget, err = s.conversations.GetMessageByID(ctx, *replyToMessageID)
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, ErrInvalidReplyTarget
+		}
+		if err != nil {
+			return nil, fmt.Errorf("conversation: failed to get reply target: %w", err)
+		}
+		if replyTarget.ConversationID != conversationID.String() {
+			return nil, ErrInvalidReplyTarget
+		}
+	}
+
+	var replyStatusTarget *models.Status
+	if replyToStatusID != nil {
+		if s.statuses == nil {
+			return nil, ErrInvalidStatusReplyTarget
+		}
+
+		replyStatusTarget, err = s.statuses.GetStatusByID(ctx, *replyToStatusID)
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, ErrInvalidStatusReplyTarget
+		}
+		if err != nil {
+			return nil, fmt.Errorf("conversation: failed to get status reply target: %w", err)
+		}
+
+		statusOwnerID, parseErr := uuid.Parse(replyStatusTarget.UserID)
+		if parseErr != nil {
+			return nil, ErrInvalidStatusReplyTarget
+		}
+
+		isOwnerParticipant, participantErr := s.conversations.IsParticipant(
+			ctx,
+			conversationID,
+			statusOwnerID,
+		)
+		if participantErr != nil {
+			return nil, fmt.Errorf("conversation: failed to check status owner participant: %w", participantErr)
+		}
+		if !isOwnerParticipant {
+			return nil, ErrInvalidStatusReplyTarget
+		}
+
+		if conversation.Type == models.ConversationTypeDirect {
+			otherUserID, otherErr := s.conversations.GetOtherParticipantID(ctx, conversationID, userID)
+			if otherErr != nil {
+				return nil, fmt.Errorf("conversation: failed to resolve other participant: %w", otherErr)
+			}
+			if statusOwnerID != otherUserID {
+				return nil, ErrInvalidStatusReplyTarget
+			}
+		}
+	}
+
+	message, err := s.conversations.CreateVoiceMessage(
+		ctx,
+		conversationID,
+		userID,
+		replyToMessageID,
+		replyToStatusID,
+		uploadResult.SecureURL,
+		durationSeconds,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("conversation: failed to create voice message: %w", err)
+	}
+
+	if replyTarget != nil {
+		scrubMessage(replyTarget)
+		message.ReplyTo = messageToReplyTo(replyTarget)
+	}
+
+	if replyStatusTarget != nil {
+		message.ReplyToStatus = &models.MessageReplyToStatus{
+			ID:              replyStatusTarget.ID,
+			OwnerID:         replyStatusTarget.UserID,
+			Type:            replyStatusTarget.Type,
+			Content:         replyStatusTarget.Content,
+			ImageURL:        replyStatusTarget.ImageURL,
+			BackgroundColor: replyStatusTarget.BackgroundColor,
+		}
+	}
+
+	scrubMessage(message)
+
+	if err := s.conversations.TouchConversation(ctx, conversationID); err != nil {
+		return nil, fmt.Errorf("conversation: failed to update conversation: %w", err)
+	}
+
+	if s.notifications != nil {
+		senderName := ""
+		if sender, userErr := s.users.GetUserByID(ctx, userID.String()); userErr != nil {
+			log.Printf("conversation: failed to resolve sender name for notification: %v", userErr)
+		} else {
+			senderName = sender.FullName
+		}
+
+		payload := map[string]interface{}{
+			"conversationId": message.ConversationID,
+			"message":        messageToNotificationPayload(message, senderName),
+		}
+
+		recipientIDs, err := s.conversations.GetOtherMembers(ctx, conversationID, userID)
+		if err != nil {
+			log.Printf("conversation: failed to resolve notification recipients: %v", err)
+		} else {
+			if err := s.notifications.NotifyUsers(recipientIDs, "new_message", payload); err != nil {
+				log.Printf("conversation: failed to notify message recipients: %v", err)
+			}
+
+			messageUUID, parseErr := uuid.Parse(message.ID)
+			if parseErr != nil {
+				log.Printf("conversation: invalid message id for delivery mark: %v", parseErr)
+			} else if conversation.Type == models.ConversationTypeGroup {
+				for _, recipientID := range recipientIDs {
+					if !s.notifications.IsUserOnline(recipientID) {
+						continue
+					}
+					if err := s.conversations.MarkMessageDelivered(ctx, messageUUID, recipientID); err != nil {
+						log.Printf("conversation: failed to mark group message delivered for user %s: %v", recipientID, err)
+					}
+				}
+				s.pushGroupTickUpdates(ctx, conversationID, []uuid.UUID{messageUUID})
+			} else {
+				deliveredMarked := false
+				for _, recipientID := range recipientIDs {
+					if !deliveredMarked && s.notifications.IsUserOnline(recipientID) {
+						if err := s.conversations.MarkDirectMessageDelivered(ctx, messageUUID); err != nil {
+							log.Printf("conversation: failed to mark message delivered: %v", err)
+						} else {
+							now := time.Now()
+							message.DeliveredAt = &now
+							deliveredMarked = true
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if conversation.Type == models.ConversationTypeGroup {
+		messageUUID, parseErr := uuid.Parse(message.ID)
+		if parseErr != nil {
+			sent := "sent"
+			message.TickStatus = &sent
+		} else {
+			tickStatuses, tickErr := s.conversations.GetGroupMessageTickStatuses(
+				ctx,
+				conversationID,
+				[]uuid.UUID{messageUUID},
+			)
+			if tickErr != nil || len(tickStatuses) == 0 {
+				sent := "sent"
+				message.TickStatus = &sent
+			} else {
+				status := tickStatuses[0].Status
+				message.TickStatus = &status
+			}
+		}
+	} else {
+		applyMessageStatus(message, nil, userID.String())
+	}
+
+	return message, nil
+}
+
+func messageToReplyTo(message *models.Message) *models.MessageReplyTo {
+	if message == nil {
+		return nil
+	}
+
+	return &models.MessageReplyTo{
+		ID:       message.ID,
+		SenderID: message.SenderID,
+		Type:     message.Type,
+		Content:  message.Content,
+		ImageURL: message.ImageURL,
+		AudioURL: message.AudioURL,
+		IsUnsent: message.IsUnsent,
+	}
+}
+
 func scrubMessage(message *models.Message) {
 	if message.IsUnsent {
 		message.Content = unsentMessagePlaceholder
 		message.ImageURL = nil
+		message.AudioURL = nil
+		message.AudioDurationSeconds = nil
 	}
 	if message.ReplyTo != nil && message.ReplyTo.IsUnsent {
 		message.ReplyTo.Content = unsentMessagePlaceholder
@@ -785,6 +1188,7 @@ func messageToNotificationPayload(message *models.Message, senderName string) ma
 		"id":             message.ID,
 		"conversationId": message.ConversationID,
 		"senderId":       message.SenderID,
+		"type":           message.Type,
 		"content":        message.Content,
 		"createdAt":      message.CreatedAt,
 		"isUnsent":       message.IsUnsent,
@@ -804,13 +1208,29 @@ func messageToNotificationPayload(message *models.Message, senderName string) ma
 	if message.ImageURL != nil {
 		payload["imageUrl"] = *message.ImageURL
 	}
+	if message.AudioURL != nil {
+		payload["audioUrl"] = *message.AudioURL
+	}
+	if message.AudioDurationSeconds != nil {
+		payload["audioDurationSeconds"] = *message.AudioDurationSeconds
+	}
 	if message.ReplyTo != nil {
-		payload["replyTo"] = map[string]interface{}{
+		replyToPayload := map[string]interface{}{
 			"id":       message.ReplyTo.ID,
 			"senderId": message.ReplyTo.SenderID,
 			"content":  message.ReplyTo.Content,
 			"isUnsent": message.ReplyTo.IsUnsent,
 		}
+		if message.ReplyTo.Type != "" {
+			replyToPayload["type"] = message.ReplyTo.Type
+		}
+		if message.ReplyTo.ImageURL != nil {
+			replyToPayload["imageUrl"] = *message.ReplyTo.ImageURL
+		}
+		if message.ReplyTo.AudioURL != nil {
+			replyToPayload["audioUrl"] = *message.ReplyTo.AudioURL
+		}
+		payload["replyTo"] = replyToPayload
 	}
 	if message.ReplyToStatus != nil {
 		payload["replyToStatus"] = map[string]interface{}{
@@ -879,4 +1299,48 @@ func validateMessageImageFile(file multipart.File) error {
 	}
 
 	return nil
+}
+
+func validateMessageVoiceFile(file multipart.File) error {
+	header := make([]byte, 512)
+	n, err := file.Read(header)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return fmt.Errorf("conversation: failed to read voice file: %w", err)
+	}
+
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("conversation: failed to reset voice file reader: %w", err)
+	}
+
+	contentType := http.DetectContentType(header[:n])
+	if !isAllowedVoiceContentType(contentType) {
+		return ErrInvalidMessageVoiceContentType
+	}
+
+	size, err := file.Seek(0, io.SeekEnd)
+	if err != nil {
+		return fmt.Errorf("conversation: failed to determine voice file size: %w", err)
+	}
+
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("conversation: failed to reset voice file reader: %w", err)
+	}
+
+	if size > maxMessageVoiceSizeBytes {
+		return ErrInvalidMessageVoiceFileSize
+	}
+
+	return nil
+}
+
+func isAllowedVoiceContentType(contentType string) bool {
+	contentType = strings.ToLower(strings.TrimSpace(contentType))
+
+	switch contentType {
+	case "application/ogg", "video/webm", "audio/webm", "audio/ogg", "audio/mpeg",
+		"audio/mp4", "audio/wav", "audio/x-wav", "audio/aac", "audio/mp3":
+		return true
+	}
+
+	return strings.HasPrefix(contentType, "audio/")
 }

@@ -99,9 +99,10 @@ type meUserResponse struct {
 	Email      string  `json:"email"`
 	Bio        *string `json:"bio"`
 	AvatarURL  *string `json:"avatarUrl"`
-	IsOnline   bool    `json:"isOnline"`
-	LastSeen   *string `json:"lastSeen"`
-	IsVerified bool    `json:"isVerified"`
+	IsOnline                 bool    `json:"isOnline"`
+	LastSeen                 *string `json:"lastSeen"`
+	NotificationSoundEnabled bool    `json:"notificationSoundEnabled"`
+	IsVerified               bool    `json:"isVerified"`
 	CreatedAt  string  `json:"createdAt"`
 	UpdatedAt  string  `json:"updatedAt"`
 }
@@ -376,10 +377,11 @@ func toMeUserResponse(user *models.User) meUserResponse {
 		Username:   user.Username,
 		Email:      user.Email,
 		Bio:        user.Bio,
-		AvatarURL:  user.AvatarURL,
-		IsOnline:   user.IsOnline,
-		IsVerified: user.IsVerified,
-		CreatedAt:  user.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		AvatarURL:                user.AvatarURL,
+		IsOnline:                 user.IsOnline,
+		IsVerified:               user.IsVerified,
+		NotificationSoundEnabled: user.NotificationSoundEnabled,
+		CreatedAt:                user.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		UpdatedAt:  user.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
 

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"strconv"
 
 	"github.com/joho/godotenv"
 )
@@ -23,12 +22,12 @@ type Config struct {
 
 	JWTSecret string
 
-	SMTPHost     string
-	SMTPPort     int
-	SMTPEmail    string
-	SMTPPassword string
-	SMTPFrom     string
-	SMTPFromName string
+	PingramAPIKey             string
+	PingramRegion             string
+	PingramFromName           string
+	PingramFromAddress        string
+	PingramEmailVerifyType    string
+	PingramPasswordResetType  string
 
 	CloudinaryCloudName string
 	CloudinaryAPIKey    string
@@ -50,12 +49,12 @@ func LoadConfig() (*Config, error) {
 		DBName:      getEnv("DB_NAME", "chitchat"),
 		DBSSLMode:   getEnv("DB_SSLMODE", "disable"),
 		JWTSecret:    getEnv("JWT_SECRET", ""),
-		SMTPHost:     getEnv("SMTP_HOST", "smtp.gmail.com"),
-		SMTPPort:     getEnvInt("SMTP_PORT", 587),
-		SMTPEmail:    getEnv("SMTP_EMAIL", ""),
-		SMTPPassword: getEnv("SMTP_PASSWORD", ""),
-		SMTPFrom:     getEnv("SMTP_FROM", ""),
-		SMTPFromName: getEnv("SMTP_FROM_NAME", "ChitChat"),
+		PingramAPIKey:            getEnv("PINGRAM_API_KEY", ""),
+		PingramRegion:            getEnv("PINGRAM_REGION", "us"),
+		PingramFromName:          getEnv("PINGRAM_FROM_NAME", "ChitChat"),
+		PingramFromAddress:       getEnv("PINGRAM_FROM_ADDRESS", ""),
+		PingramEmailVerifyType:   getEnv("PINGRAM_EMAIL_VERIFY_TYPE", "email_verify"),
+		PingramPasswordResetType: getEnv("PINGRAM_PASSWORD_RESET_TYPE", "password_reset"),
 		CloudinaryCloudName: getEnv("CLOUDINARY_CLOUD_NAME", ""),
 		CloudinaryAPIKey:    getEnv("CLOUDINARY_API_KEY", ""),
 		CloudinaryAPISecret: getEnv("CLOUDINARY_API_SECRET", ""),
@@ -67,10 +66,6 @@ func LoadConfig() (*Config, error) {
 
 	if cfg.DBName == "" {
 		return nil, fmt.Errorf("config: DB_NAME is required")
-	}
-
-	if cfg.SMTPFrom == "" {
-		cfg.SMTPFrom = cfg.SMTPEmail
 	}
 
 	if _, err := cfg.AllowedOrigins(); err != nil {
@@ -103,20 +98,6 @@ func getEnv(key, fallback string) string {
 		return value
 	}
 	return fallback
-}
-
-func getEnvInt(key string, fallback int) int {
-	value, ok := os.LookupEnv(key)
-	if !ok || value == "" {
-		return fallback
-	}
-
-	parsed, err := strconv.Atoi(value)
-	if err != nil {
-		return fallback
-	}
-
-	return parsed
 }
 
 func loadEnvFile(path string) error {

@@ -70,10 +70,11 @@ type ConversationWithPreview struct {
 	LatestMessageIsUnsent bool       `json:"-"`
 	LatestMessageAt       time.Time  `json:"latestMessageAt"`
 	RequestedAt           time.Time  `json:"requestedAt"`
-	RequesterIsOnline     bool       `json:"requesterIsOnline"`
+	RequesterIsOnline     *bool      `json:"requesterIsOnline,omitempty"`
 	RequesterLastSeen     *time.Time `json:"requesterLastSeen,omitempty"`
 	UnreadCount           int        `json:"unreadCount"`
 	IsPinned              bool       `json:"isPinned"`
+	IsMuted               bool       `json:"isMuted"`
 }
 
 type BlockedUser struct {

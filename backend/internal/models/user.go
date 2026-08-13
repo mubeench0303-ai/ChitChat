@@ -13,9 +13,10 @@ type User struct {
 	IsVerified   bool       `json:"isVerified"`
 	AvatarURL    *string    `json:"avatarUrl,omitempty"`
 	Bio          *string    `json:"bio,omitempty"`
-	IsOnline     bool       `json:"isOnline"`
-	LastSeen     *time.Time `json:"lastSeen,omitempty"`
-	IsDeleted    bool       `json:"isDeleted"`
+	IsOnline                  bool       `json:"isOnline"`
+	LastSeen                  *time.Time `json:"lastSeen,omitempty"`
+	NotificationSoundEnabled  bool       `json:"notificationSoundEnabled"`
+	IsDeleted                 bool       `json:"isDeleted"`
 	DeletedAt    *time.Time `json:"deletedAt,omitempty"`
 	CreatedAt    time.Time  `json:"createdAt"`
 	UpdatedAt    time.Time  `json:"updatedAt"`
@@ -50,7 +51,7 @@ type FriendResponse struct {
 	FullName       string  `json:"fullName"`
 	Username       string  `json:"username"`
 	AvatarURL      *string `json:"avatarUrl,omitempty"`
-	IsOnline       bool    `json:"isOnline"`
+	IsOnline       *bool   `json:"isOnline,omitempty"`
 	ConversationID string  `json:"conversationId"`
 }
 
@@ -62,19 +63,17 @@ const (
 )
 
 const (
-	PrivacyFieldLastSeen     = "last_seen"
-	PrivacyFieldOnlineStatus = "online_status"
-	PrivacyFieldProfilePhoto = "profile_photo"
-	PrivacyFieldBio          = "bio"
-	PrivacyFieldStatus       = "status"
+	PrivacyFieldLastSeenAndOnline = "last_seen_and_online"
+	PrivacyFieldProfilePhoto      = "profile_photo"
+	PrivacyFieldBio               = "bio"
+	PrivacyFieldStatus            = "status"
 )
 
 type PrivacySettings struct {
-	LastSeen     string `json:"lastSeen"`
-	OnlineStatus string `json:"onlineStatus"`
-	ProfilePhoto string `json:"profilePhoto"`
-	Bio          string `json:"bio"`
-	Status       string `json:"status"`
+	LastSeenAndOnline string `json:"lastSeenAndOnline"`
+	ProfilePhoto      string `json:"profilePhoto"`
+	Bio               string `json:"bio"`
+	Status            string `json:"status"`
 }
 
 type PrivacyExceptionUser struct {

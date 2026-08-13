@@ -359,6 +359,44 @@ func (h *AuthHandler) UpdatePrivacySetting(w http.ResponseWriter, r *http.Reques
 	})
 }
 
+type UpdateNotificationSoundRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+func (h *AuthHandler) UpdateNotificationSound(w http.ResponseWriter, r *http.Request) {
+	userIDStr, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	var req UpdateNotificationSoundRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	err = h.auth.SetNotificationSound(r.Context(), userID, req.Enabled)
+	if errors.Is(err, service.ErrUserNotFound) {
+		writeError(w, http.StatusNotFound, "User not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to update notification sound setting")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"message": "Notification sound setting updated",
+	})
+}
+
 func (h *AuthHandler) GetPrivacyExceptions(w http.ResponseWriter, r *http.Request) {
 	userIDStr, ok := middleware.GetUserID(r.Context())
 	if !ok {

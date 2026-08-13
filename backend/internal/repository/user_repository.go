@@ -58,7 +58,7 @@ func (r *UserRepository) CreateUserTx(ctx context.Context, tx pgx.Tx, user *mode
 
 func (r *UserRepository) GetUserByID(ctx context.Context, id string) (*models.User, error) {
 	const query = `
-		SELECT id, username, full_name, email, password_hash, is_verified, avatar_url, bio, is_online, last_seen, is_deleted, deleted_at, created_at, updated_at
+		SELECT id, username, full_name, email, password_hash, is_verified, avatar_url, bio, is_online, last_seen, notification_sound_enabled, is_deleted, deleted_at, created_at, updated_at
 		FROM users
 		WHERE id = $1`
 
@@ -67,7 +67,7 @@ func (r *UserRepository) GetUserByID(ctx context.Context, id string) (*models.Us
 
 func (r *UserRepository) GetUserByEmail(ctx context.Context, email string) (*models.User, error) {
 	const query = `
-		SELECT id, username, full_name, email, password_hash, is_verified, avatar_url, bio, is_online, last_seen, is_deleted, deleted_at, created_at, updated_at
+		SELECT id, username, full_name, email, password_hash, is_verified, avatar_url, bio, is_online, last_seen, notification_sound_enabled, is_deleted, deleted_at, created_at, updated_at
 		FROM users
 		WHERE email = $1`
 
@@ -76,7 +76,7 @@ func (r *UserRepository) GetUserByEmail(ctx context.Context, email string) (*mod
 
 func (r *UserRepository) GetUserByUsername(ctx context.Context, username string) (*models.User, error) {
 	const query = `
-		SELECT id, username, full_name, email, password_hash, is_verified, avatar_url, bio, is_online, last_seen, is_deleted, deleted_at, created_at, updated_at
+		SELECT id, username, full_name, email, password_hash, is_verified, avatar_url, bio, is_online, last_seen, notification_sound_enabled, is_deleted, deleted_at, created_at, updated_at
 		FROM users
 		WHERE username = $1`
 
@@ -97,6 +97,7 @@ func (r *UserRepository) scanUser(ctx context.Context, query string, arg string)
 		&user.Bio,
 		&user.IsOnline,
 		&user.LastSeen,
+		&user.NotificationSoundEnabled,
 		&user.IsDeleted,
 		&user.DeletedAt,
 		&user.CreatedAt,
@@ -178,6 +179,27 @@ func (r *UserRepository) SetLastSeen(
 		WHERE id = $1`
 
 	tag, err := r.db.Exec(ctx, query, userID.String(), lastSeen)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+
+	return nil
+}
+
+func (r *UserRepository) UpdateNotificationSoundSetting(
+	ctx context.Context,
+	userID uuid.UUID,
+	enabled bool,
+) error {
+	const query = `
+		UPDATE users
+		SET notification_sound_enabled = $2, updated_at = NOW()
+		WHERE id = $1`
+
+	tag, err := r.db.Exec(ctx, query, userID.String(), enabled)
 	if err != nil {
 		return err
 	}

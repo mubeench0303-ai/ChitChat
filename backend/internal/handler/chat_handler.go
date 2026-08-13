@@ -6,6 +6,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -45,6 +46,7 @@ func (h *ConversationHandler) GetChatList(w http.ResponseWriter, r *http.Request
 }
 
 const maxSendMessageMultipartBytes = 6 << 20 // 5MB image + form overhead
+const maxSendVoiceMultipartBytes = 11 << 20  // 10MB audio + form overhead
 const maxBackgroundMultipartBytes = 6 << 20
 
 type setBackgroundRequest struct {
@@ -221,6 +223,120 @@ func (h *ConversationHandler) SendMessage(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusCreated, message)
 }
 
+func (h *ConversationHandler) SendVoiceMessage(w http.ResponseWriter, r *http.Request) {
+	userIDStr, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	conversationID, err := uuid.Parse(chi.URLParam(r, "conversationId"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid conversation ID")
+		return
+	}
+
+	if err := r.ParseMultipartForm(maxSendVoiceMultipartBytes); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid multipart form")
+		return
+	}
+
+	replyToRaw := strings.TrimSpace(r.FormValue("replyToMessageId"))
+	var replyToRawPtr *string
+	if replyToRaw != "" {
+		replyToRawPtr = &replyToRaw
+	}
+
+	replyToMessageID, err := parseOptionalMessageID(replyToRawPtr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid reply message ID")
+		return
+	}
+
+	replyToStatusRaw := strings.TrimSpace(r.FormValue("replyToStatusId"))
+	var replyToStatusRawPtr *string
+	if replyToStatusRaw != "" {
+		replyToStatusRawPtr = &replyToStatusRaw
+	}
+
+	replyToStatusID, err := parseOptionalMessageID(replyToStatusRawPtr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid reply status ID")
+		return
+	}
+
+	durationSeconds := 0
+	if durationRaw := strings.TrimSpace(r.FormValue("durationSeconds")); durationRaw != "" {
+		parsedDuration, parseErr := strconv.Atoi(durationRaw)
+		if parseErr != nil || parsedDuration < 0 {
+			writeError(w, http.StatusBadRequest, "Invalid duration value")
+			return
+		}
+		durationSeconds = parsedDuration
+	}
+
+	file, header, err := r.FormFile("audio")
+	if err != nil {
+		if errors.Is(err, http.ErrMissingFile) {
+			writeError(w, http.StatusBadRequest, "Voice message must include an audio file")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "Expected a file field named \"audio\"")
+		return
+	}
+	defer file.Close()
+
+	message, err := h.conversations.SendVoiceMessage(
+		r.Context(),
+		userID,
+		conversationID,
+		replyToMessageID,
+		replyToStatusID,
+		file,
+		header.Filename,
+		durationSeconds,
+	)
+	if errors.Is(err, service.ErrNotAuthorized) {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrConversationNotFound) {
+		writeError(w, http.StatusNotFound, "Conversation not found")
+		return
+	}
+	if errors.Is(err, service.ErrConversationNotAccepted) {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrRecipientNoLongerExists) {
+		writeError(w, http.StatusGone, err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrInvalidReplyTarget) ||
+		errors.Is(err, service.ErrInvalidStatusReplyTarget) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrInvalidMessageVoiceFileSize) ||
+		errors.Is(err, service.ErrInvalidMessageVoiceContentType) ||
+		errors.Is(err, service.ErrMessageVoiceTooLong) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to send voice message")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, message)
+}
+
 func (h *ConversationHandler) DeleteMessageForMe(w http.ResponseWriter, r *http.Request) {
 	userIDStr, ok := middleware.GetUserID(r.Context())
 	if !ok {
@@ -293,6 +409,10 @@ func (h *ConversationHandler) EditMessage(w http.ResponseWriter, r *http.Request
 	}
 	if errors.Is(err, service.ErrEditWindowExpired) {
 		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrMessageNotEditable) {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if errors.Is(err, service.ErrMessageNotFound) {
@@ -487,6 +607,74 @@ func (h *ConversationHandler) UnpinChat(w http.ResponseWriter, r *http.Request) 
 
 	writeJSON(w, http.StatusOK, map[string]string{
 		"message": "Chat unpinned",
+	})
+}
+
+func (h *ConversationHandler) MuteChat(w http.ResponseWriter, r *http.Request) {
+	userIDStr, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	conversationID, err := uuid.Parse(chi.URLParam(r, "conversationId"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid conversation ID")
+		return
+	}
+
+	err = h.conversations.MuteChat(r.Context(), userID, conversationID)
+	if errors.Is(err, service.ErrNotAuthorized) {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to mute chat")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"message": "Chat muted",
+	})
+}
+
+func (h *ConversationHandler) UnmuteChat(w http.ResponseWriter, r *http.Request) {
+	userIDStr, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	conversationID, err := uuid.Parse(chi.URLParam(r, "conversationId"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid conversation ID")
+		return
+	}
+
+	err = h.conversations.UnmuteChat(r.Context(), userID, conversationID)
+	if errors.Is(err, service.ErrNotAuthorized) {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to unmute chat")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"message": "Chat unmuted",
 	})
 }
 

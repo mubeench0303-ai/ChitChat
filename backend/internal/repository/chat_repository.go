@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,10 +20,15 @@ func (r *ConversationRepository) CreateMessage(
 	replyToStatusID *uuid.UUID,
 	imageURL *string,
 ) (*models.Message, error) {
+	messageType := models.MessageTypeText
+	if imageURL != nil && strings.TrimSpace(*imageURL) != "" {
+		messageType = models.MessageTypeImage
+	}
+
 	const query = `
-		INSERT INTO messages (conversation_id, sender_id, content, reply_to_message_id, reply_to_status_id, image_url)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING id, conversation_id, sender_id, content, image_url, is_edited, is_unsent, reply_to_message_id, reply_to_status_id, delivered_at, created_at, updated_at`
+		INSERT INTO messages (conversation_id, sender_id, content, reply_to_message_id, reply_to_status_id, image_url, type)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING id, conversation_id, sender_id, type, content, image_url, audio_url, audio_duration_seconds, is_edited, is_unsent, reply_to_message_id, reply_to_status_id, delivered_at, created_at, updated_at`
 
 	var message models.Message
 	var replyToID *string
@@ -37,12 +43,79 @@ func (r *ConversationRepository) CreateMessage(
 		replyToMessageID,
 		replyToStatusID,
 		imageURL,
+		messageType,
 	).Scan(
 		&message.ID,
 		&message.ConversationID,
 		&message.SenderID,
+		&message.Type,
 		&message.Content,
 		&message.ImageURL,
+		&message.AudioURL,
+		&message.AudioDurationSeconds,
+		&message.IsEdited,
+		&message.IsUnsent,
+		&replyToID,
+		&replyToStatusIDValue,
+		&message.DeliveredAt,
+		&message.CreatedAt,
+		&message.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	message.ReplyToMessageID = replyToID
+	message.ReplyToStatusID = replyToStatusIDValue
+
+	return &message, nil
+}
+
+func (r *ConversationRepository) CreateVoiceMessage(
+	ctx context.Context,
+	conversationID, senderID uuid.UUID,
+	replyToMessageID *uuid.UUID,
+	replyToStatusID *uuid.UUID,
+	audioURL string,
+	durationSeconds int,
+) (*models.Message, error) {
+	const query = `
+		INSERT INTO messages (
+			conversation_id,
+			sender_id,
+			content,
+			reply_to_message_id,
+			reply_to_status_id,
+			type,
+			audio_url,
+			audio_duration_seconds
+		)
+		VALUES ($1, $2, '', $3, $4, $5, $6, $7)
+		RETURNING id, conversation_id, sender_id, type, content, image_url, audio_url, audio_duration_seconds, is_edited, is_unsent, reply_to_message_id, reply_to_status_id, delivered_at, created_at, updated_at`
+
+	var message models.Message
+	var replyToID *string
+	var replyToStatusIDValue *string
+
+	err := r.db.QueryRow(
+		ctx,
+		query,
+		conversationID.String(),
+		senderID.String(),
+		replyToMessageID,
+		replyToStatusID,
+		models.MessageTypeVoice,
+		audioURL,
+		durationSeconds,
+	).Scan(
+		&message.ID,
+		&message.ConversationID,
+		&message.SenderID,
+		&message.Type,
+		&message.Content,
+		&message.ImageURL,
+		&message.AudioURL,
+		&message.AudioDurationSeconds,
 		&message.IsEdited,
 		&message.IsUnsent,
 		&replyToID,
@@ -62,7 +135,8 @@ func (r *ConversationRepository) CreateMessage(
 }
 
 func scanMessageReplyTo(
-	replyToID, replyToSenderID, replyToContent *string,
+	replyToID, replyToSenderID, replyToType, replyToContent *string,
+	replyToImageURL, replyToAudioURL *string,
 	replyToIsUnsent *bool,
 ) *models.MessageReplyTo {
 	if replyToID == nil || *replyToID == "" {
@@ -78,8 +152,17 @@ func scanMessageReplyTo(
 	if replyToSenderID != nil {
 		replyTo.SenderID = *replyToSenderID
 	}
+	if replyToType != nil {
+		replyTo.Type = *replyToType
+	}
 	if replyToContent != nil {
 		replyTo.Content = *replyToContent
+	}
+	if replyToImageURL != nil {
+		replyTo.ImageURL = replyToImageURL
+	}
+	if replyToAudioURL != nil {
+		replyTo.AudioURL = replyToAudioURL
 	}
 	if replyToIsUnsent != nil {
 		replyTo.IsUnsent = *replyToIsUnsent
@@ -158,7 +241,7 @@ func (r *ConversationRepository) UnsendMessage(
 ) error {
 	const query = `
 		UPDATE messages
-		SET is_unsent = true, image_url = NULL, updated_at = NOW()
+		SET is_unsent = true, image_url = NULL, audio_url = NULL, audio_duration_seconds = NULL, updated_at = NOW()
 		WHERE id = $1 AND is_unsent = false`
 
 	tag, err := r.db.Exec(ctx, query, messageID.String())
@@ -193,7 +276,8 @@ func (r *ConversationRepository) ListConversations(
 			combined.requester_is_online,
 			combined.requester_last_seen,
 			combined.unread_count,
-			combined.is_pinned
+			combined.is_pinned,
+			combined.is_muted
 		FROM (
 			SELECT
 				c.id AS conversation_id,
@@ -211,6 +295,7 @@ func (r *ConversationRepository) ListConversations(
 				u.is_online AS requester_is_online,
 				u.last_seen AS requester_last_seen,
 				cm_self.is_pinned AS is_pinned,
+				cm_self.is_muted AS is_muted,
 				(
 					SELECT COUNT(*)::int
 					FROM messages m
@@ -274,9 +359,10 @@ func (r *ConversationRepository) ListConversations(
 				COALESCE(latest.is_unsent, false) AS latest_message_is_unsent,
 				COALESCE(latest.created_at, c.updated_at) AS latest_message_at,
 				c.updated_at AS requested_at,
-				false AS requester_is_online,
+				NULL::boolean AS requester_is_online,
 				NULL::timestamptz AS requester_last_seen,
 				cm_self.is_pinned AS is_pinned,
+				cm_self.is_muted AS is_muted,
 				(
 					SELECT COUNT(*)::int
 					FROM messages m
@@ -356,6 +442,7 @@ func (r *ConversationRepository) ListConversations(
 			&conversation.RequesterLastSeen,
 			&conversation.UnreadCount,
 			&conversation.IsPinned,
+			&conversation.IsMuted,
 		); err != nil {
 			return nil, err
 		}
@@ -377,7 +464,7 @@ func (r *ConversationRepository) GetMessageByID(
 	messageID uuid.UUID,
 ) (*models.Message, error) {
 	const query = `
-		SELECT id, conversation_id, sender_id, content, image_url, is_edited, is_unsent, created_at, updated_at
+		SELECT id, conversation_id, sender_id, type, content, image_url, audio_url, audio_duration_seconds, is_edited, is_unsent, created_at, updated_at
 		FROM messages
 		WHERE id = $1`
 
@@ -387,8 +474,11 @@ func (r *ConversationRepository) GetMessageByID(
 		&message.ID,
 		&message.ConversationID,
 		&message.SenderID,
+		&message.Type,
 		&message.Content,
 		&message.ImageURL,
+		&message.AudioURL,
+		&message.AudioDurationSeconds,
 		&message.IsEdited,
 		&message.IsUnsent,
 		&message.CreatedAt,
@@ -431,8 +521,11 @@ func (r *ConversationRepository) ListMessages(
 			m.id,
 			m.conversation_id,
 			m.sender_id,
+			m.type,
 			m.content,
 			m.image_url,
+			m.audio_url,
+			m.audio_duration_seconds,
 			m.is_edited,
 			m.is_unsent,
 			m.reply_to_message_id,
@@ -442,7 +535,10 @@ func (r *ConversationRepository) ListMessages(
 			m.updated_at,
 			rt.id,
 			rt.sender_id,
+			rt.type,
 			rt.content,
+			rt.image_url,
+			rt.audio_url,
 			rt.is_unsent,
 			rs.id,
 			rs.user_id,
@@ -472,7 +568,10 @@ func (r *ConversationRepository) ListMessages(
 		var replyToStatusID *string
 		var replyToID *string
 		var replyToSenderID *string
+		var replyToType *string
 		var replyToContent *string
+		var replyToImageURL *string
+		var replyToAudioURL *string
 		var replyToIsUnsent *bool
 		var statusReplyID *string
 		var statusReplyOwnerID *string
@@ -485,8 +584,11 @@ func (r *ConversationRepository) ListMessages(
 			&message.ID,
 			&message.ConversationID,
 			&message.SenderID,
+			&message.Type,
 			&message.Content,
 			&message.ImageURL,
+			&message.AudioURL,
+			&message.AudioDurationSeconds,
 			&message.IsEdited,
 			&message.IsUnsent,
 			&replyToMessageID,
@@ -496,7 +598,10 @@ func (r *ConversationRepository) ListMessages(
 			&message.UpdatedAt,
 			&replyToID,
 			&replyToSenderID,
+			&replyToType,
 			&replyToContent,
+			&replyToImageURL,
+			&replyToAudioURL,
 			&replyToIsUnsent,
 			&statusReplyID,
 			&statusReplyOwnerID,
@@ -513,7 +618,10 @@ func (r *ConversationRepository) ListMessages(
 		message.ReplyTo = scanMessageReplyTo(
 			replyToID,
 			replyToSenderID,
+			replyToType,
 			replyToContent,
+			replyToImageURL,
+			replyToAudioURL,
 			replyToIsUnsent,
 		)
 		message.ReplyToStatus = scanMessageReplyToStatus(
@@ -813,6 +921,46 @@ func (r *ConversationRepository) UnpinConversation(
 	const query = `
 		UPDATE conversation_members
 		SET is_pinned = FALSE, pinned_at = NULL
+		WHERE conversation_id = $1 AND user_id = $2`
+
+	tag, err := r.db.Exec(ctx, query, conversationID.String(), userID.String())
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+
+	return nil
+}
+
+func (r *ConversationRepository) MuteConversation(
+	ctx context.Context,
+	userID, conversationID uuid.UUID,
+) error {
+	const query = `
+		UPDATE conversation_members
+		SET is_muted = TRUE
+		WHERE conversation_id = $1 AND user_id = $2`
+
+	tag, err := r.db.Exec(ctx, query, conversationID.String(), userID.String())
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+
+	return nil
+}
+
+func (r *ConversationRepository) UnmuteConversation(
+	ctx context.Context,
+	userID, conversationID uuid.UUID,
+) error {
+	const query = `
+		UPDATE conversation_members
+		SET is_muted = FALSE
 		WHERE conversation_id = $1 AND user_id = $2`
 
 	tag, err := r.db.Exec(ctx, query, conversationID.String(), userID.String())

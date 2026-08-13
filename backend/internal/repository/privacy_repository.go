@@ -14,11 +14,10 @@ import (
 var ErrInvalidPrivacyField = errors.New("invalid privacy field")
 
 var privacyColumnByField = map[string]string{
-	models.PrivacyFieldLastSeen:     "privacy_last_seen",
-	models.PrivacyFieldOnlineStatus: "privacy_online_status",
-	models.PrivacyFieldProfilePhoto: "privacy_profile_photo",
-	models.PrivacyFieldBio:          "privacy_bio",
-	models.PrivacyFieldStatus:       "privacy_status",
+	models.PrivacyFieldLastSeenAndOnline: "privacy_last_seen_and_online",
+	models.PrivacyFieldProfilePhoto:      "privacy_profile_photo",
+	models.PrivacyFieldBio:               "privacy_bio",
+	models.PrivacyFieldStatus:            "privacy_status",
 }
 
 func privacyColumnForField(field string) (string, error) {
@@ -35,15 +34,14 @@ func (r *UserRepository) GetPrivacySettings(
 	userID uuid.UUID,
 ) (*models.PrivacySettings, error) {
 	const query = `
-		SELECT privacy_last_seen, privacy_online_status, privacy_profile_photo, privacy_bio, privacy_status
+		SELECT privacy_last_seen_and_online, privacy_profile_photo, privacy_bio, privacy_status
 		FROM users
 		WHERE id = $1`
 
 	var settings models.PrivacySettings
 
 	err := r.db.QueryRow(ctx, query, userID.String()).Scan(
-		&settings.LastSeen,
-		&settings.OnlineStatus,
+		&settings.LastSeenAndOnline,
 		&settings.ProfilePhoto,
 		&settings.Bio,
 		&settings.Status,

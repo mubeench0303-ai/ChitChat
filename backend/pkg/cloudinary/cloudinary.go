@@ -17,8 +17,9 @@ import (
 )
 
 const (
-	AvatarUploadFolder      = "chitchat/avatars"
-	BackgroundUploadFolder  = "chitchat/backgrounds"
+	AvatarUploadFolder       = "chitchat/avatars"
+	BackgroundUploadFolder   = "chitchat/backgrounds"
+	VoiceMessageUploadFolder = "chitchat/voice-messages"
 )
 
 type Client struct {
@@ -39,19 +40,26 @@ func NewClient(cloudName, apiKey, apiSecret string) *Client {
 
 type uploadResponse struct {
 	SecureURL string `json:"secure_url"`
+	Duration  float64 `json:"duration"`
 	Error     *struct {
 		Message string `json:"message"`
 	} `json:"error"`
 }
 
-func (c *Client) UploadImage(
+type UploadVideoResult struct {
+	SecureURL string
+	Duration  float64
+}
+
+func (c *Client) uploadMedia(
 	ctx context.Context,
+	resourceType string,
 	file multipart.File,
 	filename string,
 	folder string,
-) (string, error) {
+) (*UploadVideoResult, error) {
 	if c.cloudName == "" || c.apiKey == "" || c.apiSecret == "" {
-		return "", fmt.Errorf("cloudinary: client is not configured")
+		return nil, fmt.Errorf("cloudinary: client is not configured")
 	}
 
 	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
@@ -63,89 +71,109 @@ func (c *Client) UploadImage(
 
 	filePart, err := writer.CreateFormFile("file", filename)
 	if err != nil {
-		return "", fmt.Errorf("cloudinary: failed to create upload form: %w", err)
+		return nil, fmt.Errorf("cloudinary: failed to create upload form: %w", err)
 	}
 
 	if _, err := io.Copy(filePart, file); err != nil {
-		return "", fmt.Errorf("cloudinary: failed to read upload file: %w", err)
+		return nil, fmt.Errorf("cloudinary: failed to read upload file: %w", err)
 	}
 
 	if err := writer.WriteField("api_key", c.apiKey); err != nil {
-		return "", fmt.Errorf("cloudinary: failed to write api_key field: %w", err)
+		return nil, fmt.Errorf("cloudinary: failed to write api_key field: %w", err)
 	}
 	if err := writer.WriteField("timestamp", timestamp); err != nil {
-		return "", fmt.Errorf("cloudinary: failed to write timestamp field: %w", err)
+		return nil, fmt.Errorf("cloudinary: failed to write timestamp field: %w", err)
 	}
 	if err := writer.WriteField("signature", signature); err != nil {
-		return "", fmt.Errorf("cloudinary: failed to write signature field: %w", err)
+		return nil, fmt.Errorf("cloudinary: failed to write signature field: %w", err)
 	}
 	if err := writer.WriteField("folder", folder); err != nil {
-		return "", fmt.Errorf("cloudinary: failed to write folder field: %w", err)
+		return nil, fmt.Errorf("cloudinary: failed to write folder field: %w", err)
 	}
 
 	if err := writer.Close(); err != nil {
-		return "", fmt.Errorf("cloudinary: failed to finalize upload form: %w", err)
+		return nil, fmt.Errorf("cloudinary: failed to finalize upload form: %w", err)
 	}
 
 	uploadURL := fmt.Sprintf(
-		"https://api.cloudinary.com/v1_1/%s/image/upload",
+		"https://api.cloudinary.com/v1_1/%s/%s/upload",
 		c.cloudName,
+		resourceType,
 	)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, uploadURL, body)
 	if err != nil {
-		return "", fmt.Errorf("cloudinary: failed to create upload request: %w", err)
+		return nil, fmt.Errorf("cloudinary: failed to create upload request: %w", err)
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("cloudinary: upload request failed: %w", err)
+		return nil, fmt.Errorf("cloudinary: upload request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("cloudinary: failed to read upload response: %w", err)
+		return nil, fmt.Errorf("cloudinary: failed to read upload response: %w", err)
 	}
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return "", fmt.Errorf("cloudinary: API returned status %d: %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("cloudinary: API returned status %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var result uploadResponse
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		return "", fmt.Errorf("cloudinary: failed to decode upload response: %w", err)
+		return nil, fmt.Errorf("cloudinary: failed to decode upload response: %w", err)
 	}
 
 	if result.Error != nil {
-		return "", fmt.Errorf("cloudinary: %s", result.Error.Message)
+		return nil, fmt.Errorf("cloudinary: %s", result.Error.Message)
 	}
 
 	if result.SecureURL == "" {
-		return "", fmt.Errorf("cloudinary: upload response did not include a secure URL")
+		return nil, fmt.Errorf("cloudinary: upload response did not include a secure URL")
+	}
+
+	return &UploadVideoResult{
+		SecureURL: result.SecureURL,
+		Duration:  result.Duration,
+	}, nil
+}
+
+func (c *Client) UploadImage(
+	ctx context.Context,
+	file multipart.File,
+	filename string,
+	folder string,
+) (string, error) {
+	result, err := c.uploadMedia(ctx, "image", file, filename, folder)
+	if err != nil {
+		return "", err
 	}
 
 	return result.SecureURL, nil
 }
 
-type destroyResponse struct {
-	Result string `json:"result"`
-	Error  *struct {
-		Message string `json:"message"`
-	} `json:"error"`
+func (c *Client) UploadVideo(
+	ctx context.Context,
+	file multipart.File,
+	filename string,
+	folder string,
+) (*UploadVideoResult, error) {
+	return c.uploadMedia(ctx, "video", file, filename, folder)
 }
 
-func (c *Client) DeleteImage(ctx context.Context, imageURL string) error {
+func (c *Client) deleteMedia(ctx context.Context, mediaURL, resourceType string) error {
 	if c.cloudName == "" || c.apiKey == "" || c.apiSecret == "" {
 		return fmt.Errorf("cloudinary: client is not configured")
 	}
 
-	if !strings.Contains(imageURL, "res.cloudinary.com") {
+	if !strings.Contains(mediaURL, "res.cloudinary.com") {
 		return nil
 	}
 
-	publicID, err := publicIDFromURL(imageURL)
+	publicID, err := publicIDFromURL(mediaURL)
 	if err != nil {
 		return err
 	}
@@ -161,8 +189,9 @@ func (c *Client) DeleteImage(ctx context.Context, imageURL string) error {
 	form.Set("signature", signature)
 
 	destroyURL := fmt.Sprintf(
-		"https://api.cloudinary.com/v1_1/%s/image/destroy",
+		"https://api.cloudinary.com/v1_1/%s/%s/destroy",
 		c.cloudName,
+		resourceType,
 	)
 
 	req, err := http.NewRequestWithContext(
@@ -206,6 +235,21 @@ func (c *Client) DeleteImage(ctx context.Context, imageURL string) error {
 	default:
 		return fmt.Errorf("cloudinary: unexpected delete result %q", result.Result)
 	}
+}
+
+type destroyResponse struct {
+	Result string `json:"result"`
+	Error  *struct {
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+func (c *Client) DeleteImage(ctx context.Context, imageURL string) error {
+	return c.deleteMedia(ctx, imageURL, "image")
+}
+
+func (c *Client) DeleteVideo(ctx context.Context, videoURL string) error {
+	return c.deleteMedia(ctx, videoURL, "video")
 }
 
 func publicIDFromURL(imageURL string) (string, error) {

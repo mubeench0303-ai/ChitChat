@@ -2,11 +2,20 @@ package models
 
 import "time"
 
+const (
+	MessageTypeText  = "text"
+	MessageTypeImage = "image"
+	MessageTypeVoice = "voice"
+)
+
 type MessageReplyTo struct {
-	ID       string `json:"id"`
-	SenderID string `json:"senderId"`
-	Content  string `json:"content"`
-	IsUnsent bool   `json:"isUnsent,omitempty"`
+	ID       string  `json:"id"`
+	SenderID string  `json:"senderId"`
+	Type     string  `json:"type,omitempty"`
+	Content  string  `json:"content"`
+	ImageURL *string `json:"imageUrl,omitempty"`
+	AudioURL *string `json:"audioUrl,omitempty"`
+	IsUnsent bool    `json:"isUnsent,omitempty"`
 }
 
 type MessageReplyToStatus struct {
@@ -19,12 +28,15 @@ type MessageReplyToStatus struct {
 }
 
 type Message struct {
-	ID               string                `json:"id"`
-	ConversationID   string                `json:"conversationId"`
-	SenderID         string                `json:"senderId"`
-	Content          string                `json:"content"`
-	ImageURL         *string               `json:"imageUrl,omitempty"`
-	IsEdited         bool                  `json:"isEdited"`
+	ID                    string                `json:"id"`
+	ConversationID        string                `json:"conversationId"`
+	SenderID              string                `json:"senderId"`
+	Type                  string                `json:"type"`
+	Content               string                `json:"content"`
+	ImageURL              *string               `json:"imageUrl,omitempty"`
+	AudioURL              *string               `json:"audioUrl,omitempty"`
+	AudioDurationSeconds  *int                  `json:"audioDurationSeconds,omitempty"`
+	IsEdited              bool                  `json:"isEdited"`
 	IsUnsent         bool                  `json:"isUnsent"`
 	ReplyToMessageID *string               `json:"replyToMessageId,omitempty"`
 	ReplyTo          *MessageReplyTo       `json:"replyTo,omitempty"`

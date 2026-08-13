@@ -25,11 +25,10 @@ var validPrivacyVisibilities = map[string]struct{}{
 }
 
 var validPrivacyFields = map[string]struct{}{
-	models.PrivacyFieldLastSeen:     {},
-	models.PrivacyFieldOnlineStatus: {},
-	models.PrivacyFieldProfilePhoto: {},
-	models.PrivacyFieldBio:          {},
-	models.PrivacyFieldStatus:       {},
+	models.PrivacyFieldLastSeenAndOnline: {},
+	models.PrivacyFieldProfilePhoto:      {},
+	models.PrivacyFieldBio:               {},
+	models.PrivacyFieldStatus:            {},
 }
 
 type PrivacyChecker interface {
@@ -238,7 +237,7 @@ func (s *AuthService) FilterPresenceRecipients(
 			continue
 		}
 
-		canView, err := s.CanView(ctx, viewerID, targetUserID, models.PrivacyFieldOnlineStatus)
+		canView, err := s.CanView(ctx, viewerID, targetUserID, models.PrivacyFieldLastSeenAndOnline)
 		if err != nil {
 			return nil, err
 		}
@@ -248,4 +247,20 @@ func (s *AuthService) FilterPresenceRecipients(
 	}
 
 	return recipients, nil
+}
+
+func (s *AuthService) SetNotificationSound(
+	ctx context.Context,
+	userID uuid.UUID,
+	enabled bool,
+) error {
+	err := s.users.UpdateNotificationSoundSetting(ctx, userID, enabled)
+	if errors.Is(err, repository.ErrNotFound) {
+		return ErrUserNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("auth: failed to update notification sound setting: %w", err)
+	}
+
+	return nil
 }
