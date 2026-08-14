@@ -9,6 +9,8 @@ export const STATUS_BG_SWATCHES = [
   { id: "slate", value: "#475569" },
 ] as const;
 
+export type StatusBackgroundColor = (typeof STATUS_BG_SWATCHES)[number]["value"];
+
 export function getInitials(fullName: string) {
   return fullName
     .trim()

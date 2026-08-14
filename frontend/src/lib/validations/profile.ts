@@ -18,9 +18,7 @@ export const editProfileSchema = z.object({
     ),
   bio: z
     .string()
-    .max(160, "Bio must be at most 160 characters")
-    .optional()
-    .default(""),
+    .max(160, "Bio must be at most 160 characters"),
 });
 
 export type EditProfileFormData = z.infer<typeof editProfileSchema>;

@@ -575,11 +575,7 @@ function MessageInfoDialog({
   members: MemberReadStatus[];
   isDirectChat: boolean;
 }) {
-  const sections: Array<{
-    key: MemberDeliveryStatus;
-    title: string;
-    items: MemberReadStatus[];
-  }> = [
+  const sections = [
     { key: "seen", title: "Seen by", items: members.filter((m) => m.status === "seen") },
     {
       key: "delivered",
@@ -591,7 +587,15 @@ function MessageInfoDialog({
       title: "Not delivered",
       items: members.filter((m) => m.status === "not_delivered"),
     },
-  ].filter((section) => section.items.length > 0);
+  ].filter(
+    (
+      section
+    ): section is {
+      key: MemberDeliveryStatus;
+      title: string;
+      items: MemberReadStatus[];
+    } => section.items.length > 0
+  );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -1338,6 +1342,7 @@ export default function ConversationPage() {
       return;
     }
 
+    const messageId = infoMessageId;
     let cancelled = false;
 
     async function loadInfo() {
@@ -1345,7 +1350,7 @@ export default function ConversationPage() {
       setInfoError(null);
 
       try {
-        const data = await getMessageInfo(infoMessageId);
+        const data = await getMessageInfo(messageId);
         if (!cancelled) {
           setInfoMembers(data);
         }

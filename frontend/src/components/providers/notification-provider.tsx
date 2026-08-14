@@ -83,9 +83,11 @@ function showNewMessageNotification(
 
   toast(title, {
     description,
-    className: "cursor-pointer",
-    onClick: () => {
-      router.push(`/chat/${event.conversationId}`);
+    action: {
+      label: "Open",
+      onClick: () => {
+        router.push(`/chat/${event.conversationId}`);
+      },
     },
   });
 

@@ -69,7 +69,7 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
         }
       } catch {
         if (!cancelled) {
-          setConversations([]);
+          setConnections([]);
         }
       } finally {
         if (!cancelled) {

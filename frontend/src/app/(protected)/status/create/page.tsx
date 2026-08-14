@@ -12,6 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { StatusImageDisplay } from "@/components/status/status-image-display";
 import {
   STATUS_BG_SWATCHES,
+  type StatusBackgroundColor,
 } from "@/components/status/status-utils";
 import { createStatus } from "@/lib/api/auth";
 import { cn } from "@/lib/utils";
@@ -24,7 +25,7 @@ export default function CreateStatusPage() {
 
   const [mode, setMode] = useState<StatusMode>("text");
   const [textContent, setTextContent] = useState("");
-  const [backgroundColor, setBackgroundColor] = useState(
+  const [backgroundColor, setBackgroundColor] = useState<StatusBackgroundColor>(
     STATUS_BG_SWATCHES[0].value
   );
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
