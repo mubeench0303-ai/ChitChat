@@ -388,8 +388,8 @@ func (h *ConversationHandler) SendVideoMessage(w http.ResponseWriter, r *http.Re
 
 	durationSeconds := 0
 	if durationRaw := strings.TrimSpace(r.FormValue("durationSeconds")); durationRaw != "" {
-		parsedDuration, parseErr := strconv.Atoi(durationRaw)
-		if parseErr != nil || parsedDuration < 0 {
+		parsedDuration, ok := parseFormDurationSeconds(durationRaw)
+		if !ok {
 			writeError(w, http.StatusBadRequest, "Invalid duration value")
 			return
 		}

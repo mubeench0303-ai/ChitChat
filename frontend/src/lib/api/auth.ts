@@ -295,7 +295,7 @@ export function sendVideoMessage(
 ): Promise<ChatMessage> {
   const formData = new FormData();
   formData.append("video", params.video);
-  formData.append("durationSeconds", String(params.durationSeconds));
+  formData.append("durationSeconds", String(Math.ceil(params.durationSeconds)));
 
   if (params.replyToMessageId) {
     formData.append("replyToMessageId", params.replyToMessageId);

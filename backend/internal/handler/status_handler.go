@@ -6,7 +6,6 @@ import (
 	"math"
 	"mime/multipart"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -140,8 +139,8 @@ func (h *StatusHandler) CreateStatus(w http.ResponseWriter, r *http.Request) {
 	case models.StatusTypeVideo:
 		durationSeconds := 0
 		if durationRaw := strings.TrimSpace(r.FormValue("durationSeconds")); durationRaw != "" {
-			parsedDuration, parseErr := strconv.Atoi(durationRaw)
-			if parseErr != nil || parsedDuration < 0 {
+			parsedDuration, ok := parseFormDurationSeconds(durationRaw)
+			if !ok {
 				writeError(w, http.StatusBadRequest, "Invalid duration value")
 				return
 			}

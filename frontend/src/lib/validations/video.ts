@@ -58,7 +58,7 @@ export function readVideoFileMetadata(
 
     video.onloadedmetadata = () => {
       URL.revokeObjectURL(objectUrl);
-      resolve({ durationSeconds: video.duration });
+      resolve({ durationSeconds: Math.ceil(video.duration) });
     };
 
     video.onerror = () => {
