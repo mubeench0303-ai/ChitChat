@@ -84,6 +84,17 @@ func (c *Config) AllowedOrigins() ([]string, error) {
 	return []string{c.FrontendURL}, nil
 }
 
+// AuthCookieSecure is true when the frontend is served over HTTPS (production).
+// Cross-site cookies then require SameSite=None and Secure=true.
+func (c *Config) AuthCookieSecure() bool {
+	parsed, err := url.Parse(c.FrontendURL)
+	if err != nil {
+		return false
+	}
+
+	return parsed.Scheme == "https"
+}
+
 func (c *Config) WSOriginPatterns() ([]string, error) {
 	parsed, err := url.Parse(c.FrontendURL)
 	if err != nil || parsed.Host == "" {

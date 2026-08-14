@@ -76,7 +76,7 @@ func main() {
 	)
 	statusService := service.NewStatusService(statusRepo, userRepo, authService)
 	statusService.StartCleanupJob(ctx)
-	authHandler := handler.NewAuthHandler(authService, userRepo)
+	authHandler := handler.NewAuthHandler(authService, userRepo, cfg.AuthCookieSecure())
 	conversationHandler := handler.NewConversationHandler(conversationService, cloudinaryClient)
 	statusHandler := handler.NewStatusHandler(statusService, cloudinaryClient)
 	authMiddleware := middleware.NewAuthMiddleware(jwtHelper)

@@ -273,7 +273,7 @@ func (h *AuthHandler) DeleteAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clearAuthCookie(w)
+	h.clearAuthCookie(w)
 
 	writeJSON(w, http.StatusOK, map[string]string{
 		"message": "Account deleted successfully",

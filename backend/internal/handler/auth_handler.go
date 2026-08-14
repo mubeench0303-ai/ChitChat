@@ -16,16 +16,18 @@ import (
 )
 
 type AuthHandler struct {
-	auth      *service.AuthService
-	users     *repository.UserRepository
-	validator *validator.Validate
+	auth         *service.AuthService
+	users        *repository.UserRepository
+	validator    *validator.Validate
+	cookieSecure bool
 }
 
-func NewAuthHandler(auth *service.AuthService, users *repository.UserRepository) *AuthHandler {
+func NewAuthHandler(auth *service.AuthService, users *repository.UserRepository, cookieSecure bool) *AuthHandler {
 	return &AuthHandler{
-		auth:      auth,
-		users:     users,
-		validator: validator.New(),
+		auth:         auth,
+		users:        users,
+		validator:    validator.New(),
+		cookieSecure: cookieSecure,
 	}
 }
 
@@ -60,17 +62,28 @@ type ResetPasswordRequest struct {
 	NewPassword string `json:"new_password" validate:"required,min=8"`
 }
 
-func clearAuthCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{
+func (h *AuthHandler) authCookie(value string, maxAge int) *http.Cookie {
+	cookie := &http.Cookie{
 		Name:     middleware.AuthTokenCookieName,
-		Value:    "",
+		Value:    value,
 		Path:     "/",
-		MaxAge:   -1,
-		Expires:  time.Unix(0, 0),
+		MaxAge:   maxAge,
 		HttpOnly: true,
-		Secure:   false,
+		Secure:   h.cookieSecure,
 		SameSite: http.SameSiteLaxMode,
-	})
+	}
+
+	if h.cookieSecure {
+		cookie.SameSite = http.SameSiteNoneMode
+	}
+
+	return cookie
+}
+
+func (h *AuthHandler) clearAuthCookie(w http.ResponseWriter) {
+	cookie := h.authCookie("", -1)
+	cookie.Expires = time.Unix(0, 0)
+	http.SetCookie(w, cookie)
 }
 
 type userResponse struct {
@@ -214,15 +227,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.SetCookie(w, &http.Cookie{
-		Name:     middleware.AuthTokenCookieName,
-		Value:    result.Token,
-		Path:     "/",
-		MaxAge:   86400,
-		HttpOnly: true,
-		Secure:   false,
-		SameSite: http.SameSiteLaxMode,
-	})
+	http.SetCookie(w, h.authCookie(result.Token, 86400))
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"message": "Login successful",
@@ -285,7 +290,7 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
-	clearAuthCookie(w)
+	h.clearAuthCookie(w)
 
 	writeJSON(w, http.StatusOK, map[string]string{
 		"message": "Logged out successfully.",

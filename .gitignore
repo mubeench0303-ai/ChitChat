@@ -9,6 +9,7 @@ frontend/out/
 frontend/.env
 frontend/.env.local
 backend/.env
+backend/.env.backup
 
 # ==========================
 # Go
