@@ -21,11 +21,12 @@ const (
 )
 
 var (
-	ErrStatusNotFound    = errors.New("status not found")
-	ErrNotStatusOwner    = errors.New("you can only manage your own statuses")
-	ErrInvalidStatusType = errors.New("status type must be text or image")
-	ErrStatusTextRequired = errors.New("text status content is required")
+	ErrStatusNotFound      = errors.New("status not found")
+	ErrNotStatusOwner      = errors.New("you can only manage your own statuses")
+	ErrInvalidStatusType   = errors.New("status type must be text, image, or video")
+	ErrStatusTextRequired  = errors.New("text status content is required")
 	ErrStatusImageRequired = errors.New("image status requires an image URL")
+	ErrStatusVideoRequired = errors.New("video status requires a video file")
 )
 
 type StatusService struct {
@@ -108,6 +109,8 @@ func (s *StatusService) CreateTextStatus(
 		contentPtr,
 		nil,
 		bg,
+		nil,
+		nil,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("status: failed to create text status: %w", err)
@@ -144,9 +147,51 @@ func (s *StatusService) CreateImageStatus(
 		contentPtr,
 		urlPtr,
 		nil,
+		nil,
+		nil,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("status: failed to create image status: %w", err)
+	}
+
+	return status, nil
+}
+
+func (s *StatusService) CreateVideoStatus(
+	ctx context.Context,
+	userID uuid.UUID,
+	videoURL, caption string,
+	durationSeconds int,
+) (*models.Status, error) {
+	trimmedURL := strings.TrimSpace(videoURL)
+	if trimmedURL == "" {
+		return nil, ErrStatusVideoRequired
+	}
+
+	if err := s.enforceStatusLimit(ctx, userID); err != nil {
+		return nil, err
+	}
+
+	var contentPtr *string
+	if trimmedCaption := strings.TrimSpace(caption); trimmedCaption != "" {
+		contentPtr = &trimmedCaption
+	}
+
+	urlPtr := &trimmedURL
+	durationPtr := &durationSeconds
+
+	status, err := s.statuses.CreateStatus(
+		ctx,
+		userID,
+		models.StatusTypeVideo,
+		contentPtr,
+		nil,
+		nil,
+		urlPtr,
+		durationPtr,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("status: failed to create video status: %w", err)
 	}
 
 	return status, nil

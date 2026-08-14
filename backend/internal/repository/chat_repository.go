@@ -134,9 +134,74 @@ func (r *ConversationRepository) CreateVoiceMessage(
 	return &message, nil
 }
 
+func (r *ConversationRepository) CreateVideoMessage(
+	ctx context.Context,
+	conversationID, senderID uuid.UUID,
+	replyToMessageID *uuid.UUID,
+	replyToStatusID *uuid.UUID,
+	videoURL string,
+	durationSeconds int,
+) (*models.Message, error) {
+	const query = `
+		INSERT INTO messages (
+			conversation_id,
+			sender_id,
+			content,
+			reply_to_message_id,
+			reply_to_status_id,
+			type,
+			video_url,
+			video_duration_seconds
+		)
+		VALUES ($1, $2, '', $3, $4, $5, $6, $7)
+		RETURNING id, conversation_id, sender_id, type, content, image_url, audio_url, audio_duration_seconds, video_url, video_duration_seconds, is_edited, is_unsent, reply_to_message_id, reply_to_status_id, delivered_at, created_at, updated_at`
+
+	var message models.Message
+	var replyToID *string
+	var replyToStatusIDValue *string
+
+	err := r.db.QueryRow(
+		ctx,
+		query,
+		conversationID.String(),
+		senderID.String(),
+		replyToMessageID,
+		replyToStatusID,
+		models.MessageTypeVideo,
+		videoURL,
+		durationSeconds,
+	).Scan(
+		&message.ID,
+		&message.ConversationID,
+		&message.SenderID,
+		&message.Type,
+		&message.Content,
+		&message.ImageURL,
+		&message.AudioURL,
+		&message.AudioDurationSeconds,
+		&message.VideoURL,
+		&message.VideoDurationSeconds,
+		&message.IsEdited,
+		&message.IsUnsent,
+		&replyToID,
+		&replyToStatusIDValue,
+		&message.DeliveredAt,
+		&message.CreatedAt,
+		&message.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	message.ReplyToMessageID = replyToID
+	message.ReplyToStatusID = replyToStatusIDValue
+
+	return &message, nil
+}
+
 func scanMessageReplyTo(
 	replyToID, replyToSenderID, replyToType, replyToContent *string,
-	replyToImageURL, replyToAudioURL *string,
+	replyToImageURL, replyToAudioURL, replyToVideoURL *string,
 	replyToIsUnsent *bool,
 ) *models.MessageReplyTo {
 	if replyToID == nil || *replyToID == "" {
@@ -164,6 +229,9 @@ func scanMessageReplyTo(
 	if replyToAudioURL != nil {
 		replyTo.AudioURL = replyToAudioURL
 	}
+	if replyToVideoURL != nil {
+		replyTo.VideoURL = replyToVideoURL
+	}
 	if replyToIsUnsent != nil {
 		replyTo.IsUnsent = *replyToIsUnsent
 	}
@@ -173,7 +241,8 @@ func scanMessageReplyTo(
 
 func scanMessageReplyToStatus(
 	statusID, ownerID, statusType *string,
-	content, imageURL, backgroundColor *string,
+	content, imageURL, videoURL, backgroundColor *string,
+	videoDurationSeconds *int,
 ) *models.MessageReplyToStatus {
 	if statusID == nil || *statusID == "" {
 		return nil
@@ -194,6 +263,12 @@ func scanMessageReplyToStatus(
 	}
 	if imageURL != nil {
 		replyToStatus.ImageURL = imageURL
+	}
+	if videoURL != nil {
+		replyToStatus.VideoURL = videoURL
+	}
+	if videoDurationSeconds != nil {
+		replyToStatus.VideoDurationSeconds = videoDurationSeconds
 	}
 	if backgroundColor != nil {
 		replyToStatus.BackgroundColor = backgroundColor
@@ -241,7 +316,7 @@ func (r *ConversationRepository) UnsendMessage(
 ) error {
 	const query = `
 		UPDATE messages
-		SET is_unsent = true, image_url = NULL, audio_url = NULL, audio_duration_seconds = NULL, updated_at = NOW()
+		SET is_unsent = true, image_url = NULL, audio_url = NULL, audio_duration_seconds = NULL, video_url = NULL, video_duration_seconds = NULL, updated_at = NOW()
 		WHERE id = $1 AND is_unsent = false`
 
 	tag, err := r.db.Exec(ctx, query, messageID.String())
@@ -464,7 +539,7 @@ func (r *ConversationRepository) GetMessageByID(
 	messageID uuid.UUID,
 ) (*models.Message, error) {
 	const query = `
-		SELECT id, conversation_id, sender_id, type, content, image_url, audio_url, audio_duration_seconds, is_edited, is_unsent, created_at, updated_at
+		SELECT id, conversation_id, sender_id, type, content, image_url, audio_url, audio_duration_seconds, video_url, video_duration_seconds, is_edited, is_unsent, created_at, updated_at
 		FROM messages
 		WHERE id = $1`
 
@@ -479,6 +554,8 @@ func (r *ConversationRepository) GetMessageByID(
 		&message.ImageURL,
 		&message.AudioURL,
 		&message.AudioDurationSeconds,
+		&message.VideoURL,
+		&message.VideoDurationSeconds,
 		&message.IsEdited,
 		&message.IsUnsent,
 		&message.CreatedAt,
@@ -526,6 +603,8 @@ func (r *ConversationRepository) ListMessages(
 			m.image_url,
 			m.audio_url,
 			m.audio_duration_seconds,
+			m.video_url,
+			m.video_duration_seconds,
 			m.is_edited,
 			m.is_unsent,
 			m.reply_to_message_id,
@@ -539,12 +618,15 @@ func (r *ConversationRepository) ListMessages(
 			rt.content,
 			rt.image_url,
 			rt.audio_url,
+			rt.video_url,
 			rt.is_unsent,
 			rs.id,
 			rs.user_id,
 			rs.type,
 			rs.content,
 			rs.image_url,
+			rs.video_url,
+			rs.video_duration_seconds,
 			rs.background_color
 		FROM messages m
 		LEFT JOIN message_deletions md ON md.message_id = m.id AND md.user_id = $2
@@ -572,12 +654,15 @@ func (r *ConversationRepository) ListMessages(
 		var replyToContent *string
 		var replyToImageURL *string
 		var replyToAudioURL *string
+		var replyToVideoURL *string
 		var replyToIsUnsent *bool
 		var statusReplyID *string
 		var statusReplyOwnerID *string
 		var statusReplyType *string
 		var statusReplyContent *string
 		var statusReplyImageURL *string
+		var statusReplyVideoURL *string
+		var statusReplyVideoDurationSeconds *int
 		var statusReplyBackgroundColor *string
 
 		if err := rows.Scan(
@@ -589,6 +674,8 @@ func (r *ConversationRepository) ListMessages(
 			&message.ImageURL,
 			&message.AudioURL,
 			&message.AudioDurationSeconds,
+			&message.VideoURL,
+			&message.VideoDurationSeconds,
 			&message.IsEdited,
 			&message.IsUnsent,
 			&replyToMessageID,
@@ -602,12 +689,15 @@ func (r *ConversationRepository) ListMessages(
 			&replyToContent,
 			&replyToImageURL,
 			&replyToAudioURL,
+			&replyToVideoURL,
 			&replyToIsUnsent,
 			&statusReplyID,
 			&statusReplyOwnerID,
 			&statusReplyType,
 			&statusReplyContent,
 			&statusReplyImageURL,
+			&statusReplyVideoURL,
+			&statusReplyVideoDurationSeconds,
 			&statusReplyBackgroundColor,
 		); err != nil {
 			return nil, err
@@ -622,6 +712,7 @@ func (r *ConversationRepository) ListMessages(
 			replyToContent,
 			replyToImageURL,
 			replyToAudioURL,
+			replyToVideoURL,
 			replyToIsUnsent,
 		)
 		message.ReplyToStatus = scanMessageReplyToStatus(
@@ -630,7 +721,9 @@ func (r *ConversationRepository) ListMessages(
 			statusReplyType,
 			statusReplyContent,
 			statusReplyImageURL,
+			statusReplyVideoURL,
 			statusReplyBackgroundColor,
+			statusReplyVideoDurationSeconds,
 		)
 
 		messages = append(messages, message)

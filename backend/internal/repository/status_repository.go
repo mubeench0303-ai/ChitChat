@@ -21,7 +21,7 @@ func NewStatusRepository(db *pgxpool.Pool) *StatusRepository {
 }
 
 const statusSelectColumns = `
-	id, user_id, type, content, image_url, background_color, created_at`
+	id, user_id, type, content, image_url, background_color, video_url, video_duration_seconds, created_at`
 
 func scanStatus(scanner interface {
 	Scan(dest ...any) error
@@ -33,6 +33,8 @@ func scanStatus(scanner interface {
 		&status.Content,
 		&status.ImageURL,
 		&status.BackgroundColor,
+		&status.VideoURL,
+		&status.VideoDurationSeconds,
 		&status.CreatedAt,
 	)
 }
@@ -41,11 +43,12 @@ func (r *StatusRepository) CreateStatus(
 	ctx context.Context,
 	userID uuid.UUID,
 	statusType string,
-	content, imageURL, backgroundColor *string,
+	content, imageURL, backgroundColor, videoURL *string,
+	videoDurationSeconds *int,
 ) (*models.Status, error) {
 	const query = `
-		INSERT INTO statuses (user_id, type, content, image_url, background_color)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO statuses (user_id, type, content, image_url, background_color, video_url, video_duration_seconds)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING` + statusSelectColumns
 
 	var status models.Status
@@ -58,6 +61,8 @@ func (r *StatusRepository) CreateStatus(
 		content,
 		imageURL,
 		backgroundColor,
+		videoURL,
+		videoDurationSeconds,
 	).Scan(
 		&status.ID,
 		&status.UserID,
@@ -65,6 +70,8 @@ func (r *StatusRepository) CreateStatus(
 		&status.Content,
 		&status.ImageURL,
 		&status.BackgroundColor,
+		&status.VideoURL,
+		&status.VideoDurationSeconds,
 		&status.CreatedAt,
 	)
 	if err != nil {
@@ -85,15 +92,7 @@ func (r *StatusRepository) GetStatusByID(
 
 	var status models.Status
 
-	err := r.db.QueryRow(ctx, query, statusID.String()).Scan(
-		&status.ID,
-		&status.UserID,
-		&status.Type,
-		&status.Content,
-		&status.ImageURL,
-		&status.BackgroundColor,
-		&status.CreatedAt,
-	)
+	err := scanStatus(r.db.QueryRow(ctx, query, statusID.String()), &status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -136,15 +135,7 @@ func (r *StatusRepository) GetOldestStatus(
 
 	var status models.Status
 
-	err := r.db.QueryRow(ctx, query, userID.String()).Scan(
-		&status.ID,
-		&status.UserID,
-		&status.Type,
-		&status.Content,
-		&status.ImageURL,
-		&status.BackgroundColor,
-		&status.CreatedAt,
-	)
+	err := scanStatus(r.db.QueryRow(ctx, query, userID.String()), &status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -199,7 +190,7 @@ func (r *StatusRepository) GetStatusesFromConnections(
 	since time.Time,
 ) ([]models.Status, error) {
 	const query = `
-		SELECT s.id, s.user_id, s.type, s.content, s.image_url, s.background_color, s.created_at
+		SELECT s.id, s.user_id, s.type, s.content, s.image_url, s.background_color, s.video_url, s.video_duration_seconds, s.created_at
 		FROM statuses s
 		JOIN users u ON u.id = s.user_id
 		WHERE s.created_at > $2

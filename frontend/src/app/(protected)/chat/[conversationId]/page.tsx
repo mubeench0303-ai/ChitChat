@@ -3,13 +3,14 @@
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Check, CheckCheck, ImageIcon, Info, Loader2, Mic, MoreVertical, Palette, Send, Smile, Users, X } from "lucide-react";
+import { ArrowLeft, Check, CheckCheck, ImageIcon, Info, Loader2, Mic, MoreVertical, Palette, Send, Smile, Users, Video, X } from "lucide-react";
 import { toast } from "sonner";
 
 import {
   signupGradientBgClass,
 } from "@/components/auth/signup-submit-button";
 import { ChatBackgroundDialog } from "@/components/chat/chat-background-dialog";
+import { VideoMessageBubble } from "@/components/chat/video-message-bubble";
 import { VoiceMessageBubble } from "@/components/chat/voice-message-bubble";
 import { VoicePlaybackProvider } from "@/components/chat/voice-playback-context";
 import { VoiceRecorder } from "@/components/chat/voice-recorder";
@@ -35,7 +36,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
-import { getConversationHeaderInfo, getGroupInfo, getMessageInfo, getMessages, sendMessage, sendVoiceMessage, deleteMessageForMe, editMessage, unsendMessage, markConversationRead, toggleReaction, acceptRequest, rejectRequest, blockRequest } from "@/lib/api/auth";
+import { getConversationHeaderInfo, getGroupInfo, getMessageInfo, getMessages, sendMessage, sendVideoMessage, sendVoiceMessage, deleteMessageForMe, editMessage, unsendMessage, markConversationRead, toggleReaction, acceptRequest, rejectRequest, blockRequest } from "@/lib/api/auth";
 import { sendMessageRequest } from "@/lib/api/conversations";
 import { getApiErrorStatus } from "@/lib/api/errors";
 import { getChatBackgroundStyle } from "@/lib/chat-backgrounds";
@@ -47,6 +48,12 @@ import {
 import {
   validateVoiceMessageBlob,
 } from "@/lib/validations/audio";
+import {
+  MESSAGE_VIDEO_ACCEPT,
+  captureVideoThumbnail,
+  readVideoFileMetadata,
+  validateVideoMessageFile,
+} from "@/lib/validations/video";
 import {
   REACTION_EMOJIS,
   getReactionAsset,
@@ -374,6 +381,8 @@ function applyUnsentToMessage(message: ChatMessage): ChatMessage {
     imageUrl: null,
     audioUrl: null,
     audioDurationSeconds: null,
+    videoUrl: null,
+    videoDurationSeconds: null,
     isUnsent: true,
     isEdited: false,
   };
@@ -386,6 +395,10 @@ function getReplyPreviewText(message: ChatMessage) {
 
   if (message.type === "voice" || message.audioUrl) {
     return "Voice message";
+  }
+
+  if (message.type === "video" || message.videoUrl) {
+    return "Video message";
   }
 
   if (message.imageUrl && !message.content.trim()) {
@@ -404,6 +417,10 @@ function getReplyToPreviewText(replyTo: MessageReplyTo) {
     return "Voice message";
   }
 
+  if (replyTo.type === "video" || replyTo.videoUrl) {
+    return "Video message";
+  }
+
   if ((replyTo.type === "image" || replyTo.imageUrl) && !replyTo.content.trim()) {
     return "Photo";
   }
@@ -416,6 +433,13 @@ function isVoiceReplyTarget(target: {
   audioUrl?: string | null;
 }) {
   return target.type === "voice" || Boolean(target.audioUrl);
+}
+
+function isVideoReplyTarget(target: {
+  type?: string;
+  videoUrl?: string | null;
+}) {
+  return target.type === "video" || Boolean(target.videoUrl);
 }
 
 function isImageReplyTarget(target: {
@@ -666,6 +690,7 @@ function ReplyPreviewBlock({
   const isReplyUnsent = Boolean(replyTo.isUnsent);
   const previewText = getReplyToPreviewText(replyTo);
   const showVoiceIcon = isVoiceReplyTarget(replyTo);
+  const showVideoIcon = isVideoReplyTarget(replyTo);
   const showImagePreview =
     isImageReplyTarget(replyTo) && Boolean(replyTo.imageUrl);
 
@@ -682,6 +707,8 @@ function ReplyPreviewBlock({
       <div className="mt-0.5 flex min-w-0 items-center gap-2">
         {showVoiceIcon ? (
           <Mic className="size-3.5 shrink-0 text-text-muted" strokeWidth={2} />
+        ) : showVideoIcon ? (
+          <Video className="size-3.5 shrink-0 text-text-muted" strokeWidth={2} />
         ) : showImagePreview ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
@@ -767,6 +794,9 @@ function MessageBubble({
   onUnsendRequest,
   onMessageUpdated,
   onImageClick,
+  onVideoClick,
+  uploadProgress = null,
+  thumbnailUrl = null,
   onToggleReaction,
   onInfoRequest,
   actionsLocked = false,
@@ -785,6 +815,9 @@ function MessageBubble({
   onUnsendRequest: (message: ChatMessage) => void;
   onMessageUpdated: (message: ChatMessage) => void;
   onImageClick: (message: ChatMessage) => void;
+  onVideoClick: (message: ChatMessage) => void;
+  uploadProgress?: number | null;
+  thumbnailUrl?: string | null;
   onToggleReaction: (messageId: string, emoji: string) => void;
   onInfoRequest?: (message: ChatMessage) => void;
   actionsLocked?: boolean;
@@ -827,10 +860,12 @@ function MessageBubble({
   const canSaveEdit = editValidation.success && !isSaving;
   const isUnsent = Boolean(message.isUnsent);
   const hasImage = Boolean(message.imageUrl) && !isUnsent;
+  const hasVideo =
+    (message.type === "video" || Boolean(message.videoUrl)) && !isUnsent;
   const hasVoice =
     (message.type === "voice" || Boolean(message.audioUrl)) && !isUnsent;
   const hasCaption = Boolean(message.content.trim()) && !isUnsent;
-  const isImageOnly = hasImage && !hasCaption && !hasVoice;
+  const isImageOnly = hasImage && !hasCaption && !hasVoice && !hasVideo;
   const deliveryTickStatus = isGroupChat ? message.tickStatus : message.status;
 
   async function handleCopy() {
@@ -1095,6 +1130,17 @@ function MessageBubble({
                   />
                 </button>
               ) : null}
+              {hasVideo ? (
+                <VideoMessageBubble
+                  videoUrl={message.videoUrl}
+                  thumbnailUrl={thumbnailUrl}
+                  durationSeconds={message.videoDurationSeconds ?? 0}
+                  isSent={isSent}
+                  isUploading={message.isUploading}
+                  uploadProgress={uploadProgress}
+                  onOpen={() => onVideoClick(message)}
+                />
+              ) : null}
               {hasVoice ? (
                 <VoiceMessageBubble
                   messageId={message.id}
@@ -1235,6 +1281,7 @@ export default function ConversationPage() {
   const messagesScrollRef = useRef<HTMLDivElement>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const videoInputRef = useRef<HTMLInputElement>(null);
   const imagePreviewUrlRef = useRef<string | null>(null);
   const isTypingActiveRef = useRef(false);
   const stopTypingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1263,6 +1310,13 @@ export default function ConversationPage() {
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
   const [imagePickerError, setImagePickerError] = useState<string | null>(null);
+  const [videoError, setVideoError] = useState<string | null>(null);
+  const [videoUploadProgressById, setVideoUploadProgressById] = useState<
+    Record<string, number>
+  >({});
+  const [videoThumbnailById, setVideoThumbnailById] = useState<
+    Record<string, string>
+  >({});
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [isVoiceRecording, setIsVoiceRecording] = useState(false);
   const [viewerMessage, setViewerMessage] = useState<ChatMessage | null>(null);
@@ -1366,6 +1420,125 @@ export default function ConversationPage() {
     setSelectedImage(file);
     setImagePreviewUrl(previewUrl);
     event.target.value = "";
+  }
+
+  async function handleVideoSelect(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    setVideoError(null);
+    event.target.value = "";
+
+    if (!file) {
+      return;
+    }
+
+    try {
+      const { durationSeconds } = await readVideoFileMetadata(file);
+      const validationError = validateVideoMessageFile(file, durationSeconds);
+      if (validationError) {
+        setVideoError(validationError);
+        return;
+      }
+
+      const thumbnailUrl = await captureVideoThumbnail(file);
+      await handleVideoSend(file, durationSeconds, thumbnailUrl);
+    } catch (error) {
+      setVideoError(
+        error instanceof Error ? error.message : "Could not process video"
+      );
+    }
+  }
+
+  async function handleVideoSend(
+    file: File,
+    durationSeconds: number,
+    thumbnailUrl: string
+  ) {
+    if (!conversationId || !currentUser?.id) {
+      return;
+    }
+
+    setVideoError(null);
+    setIsSending(true);
+
+    const replyTarget = replyingTo;
+    const tempId = `temp-video-${Date.now()}`;
+
+    setVideoThumbnailById((current) => ({ ...current, [tempId]: thumbnailUrl }));
+    setVideoUploadProgressById((current) => ({ ...current, [tempId]: 0 }));
+
+    const optimisticMessage: ChatMessage = {
+      id: tempId,
+      conversationId,
+      senderId: currentUser.id,
+      type: "video",
+      content: "",
+      videoDurationSeconds: durationSeconds,
+      isUploading: true,
+      replyToMessageId: replyTarget?.id,
+      replyTo: replyTarget
+        ? {
+            id: replyTarget.id,
+            senderId: replyTarget.senderId,
+            type: replyTarget.type,
+            content: getReplyPreviewText(replyTarget),
+            imageUrl: replyTarget.imageUrl,
+            audioUrl: replyTarget.audioUrl,
+            videoUrl: replyTarget.videoUrl,
+            isUnsent: replyTarget.isUnsent,
+          }
+        : undefined,
+      status: "sent",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    setMessages((current) => [...current, optimisticMessage]);
+    requestAnimationFrame(() => {
+      scrollMessagesToBottom(
+        messagesScrollRef.current,
+        messagesEndRef.current,
+        { force: true }
+      );
+    });
+    setReplyingTo(null);
+
+    try {
+      const createdMessage = await sendVideoMessage(conversationId, {
+        video: file,
+        durationSeconds,
+        replyToMessageId: replyTarget?.id,
+        onUploadProgress: (percent) => {
+          setVideoUploadProgressById((current) => ({
+            ...current,
+            [tempId]: percent,
+          }));
+        },
+      });
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === tempId ? createdMessage : message
+        )
+      );
+    } catch (error) {
+      setMessages((current) =>
+        current.filter((message) => message.id !== tempId)
+      );
+      toast.error(
+        error instanceof Error ? error.message : "Failed to send video message"
+      );
+    } finally {
+      setVideoUploadProgressById((current) => {
+        const next = { ...current };
+        delete next[tempId];
+        return next;
+      });
+      setVideoThumbnailById((current) => {
+        const next = { ...current };
+        delete next[tempId];
+        return next;
+      });
+      setIsSending(false);
+    }
   }
 
   function markCurrentConversationRead() {
@@ -2502,6 +2675,9 @@ export default function ConversationPage() {
                         onUnsendRequest={handleUnsendRequest}
                         onMessageUpdated={handleMessageUpdated}
                         onImageClick={setViewerMessage}
+                        onVideoClick={setViewerMessage}
+                        uploadProgress={videoUploadProgressById[message.id] ?? null}
+                        thumbnailUrl={videoThumbnailById[message.id] ?? null}
                         onToggleReaction={(messageId, emoji) =>
                           void handleToggleReaction(messageId, emoji)
                         }
@@ -2614,6 +2790,8 @@ export default function ConversationPage() {
                 <div className="mt-0.5 flex min-w-0 items-center gap-2">
                   {isVoiceReplyTarget(replyingTo) ? (
                     <Mic className="size-4 shrink-0 text-text-muted" strokeWidth={2} />
+                  ) : isVideoReplyTarget(replyingTo) ? (
+                    <Video className="size-4 shrink-0 text-text-muted" strokeWidth={2} />
                   ) : replyingTo.imageUrl && !replyingTo.content.trim() ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
@@ -2659,6 +2837,12 @@ export default function ConversationPage() {
             </p>
           ) : null}
 
+          {videoError ? (
+            <p className="mb-2 rounded-[13px] border border-border/70 bg-surface-1/50 px-3 py-2 text-[13px] leading-relaxed text-accent">
+              {videoError}
+            </p>
+          ) : null}
+
           {imagePreviewUrl ? (
             <div className="mb-2 flex items-start gap-2">
               <div className="relative shrink-0">
@@ -2698,6 +2882,14 @@ export default function ConversationPage() {
                   aria-hidden
                   onChange={handleImageSelect}
                 />
+                <input
+                  ref={videoInputRef}
+                  type="file"
+                  accept={MESSAGE_VIDEO_ACCEPT}
+                  className="hidden"
+                  aria-hidden
+                  onChange={(event) => void handleVideoSelect(event)}
+                />
                 <Button
                   type="button"
                   variant="ghost"
@@ -2708,6 +2900,17 @@ export default function ConversationPage() {
                   onClick={() => imageInputRef.current?.click()}
                 >
                   <ImageIcon className="size-4" strokeWidth={2} />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  disabled={isLoading || Boolean(loadError) || isSending}
+                  aria-label="Attach video"
+                  className="size-10 shrink-0 rounded-xl text-text-muted"
+                  onClick={() => videoInputRef.current?.click()}
+                >
+                  <Video className="size-4" strokeWidth={2} />
                 </Button>
                   </>
                 ) : null}
@@ -2889,12 +3092,14 @@ export default function ConversationPage() {
           className="fixed inset-0 z-100 flex flex-col items-center justify-center p-4 sm:p-8"
           role="dialog"
           aria-modal="true"
-          aria-label="Image viewer"
+          aria-label={viewerMessage.videoUrl ? "Video viewer" : "Image viewer"}
         >
           <button
             type="button"
             className="absolute inset-0 bg-black/90"
-            aria-label="Close image viewer"
+            aria-label={
+              viewerMessage.videoUrl ? "Close video viewer" : "Close image viewer"
+            }
             onClick={() => setViewerMessage(null)}
           />
 
@@ -2903,13 +3108,29 @@ export default function ConversationPage() {
             variant="ghost"
             size="icon"
             className="absolute top-4 right-4 z-10 text-white hover:bg-white/10 hover:text-white"
-            aria-label="Close image viewer"
+            aria-label={
+              viewerMessage.videoUrl ? "Close video viewer" : "Close image viewer"
+            }
             onClick={() => setViewerMessage(null)}
           >
             <X className="size-5" strokeWidth={2} />
           </Button>
 
-          {viewerMessage.imageUrl ? (
+          {viewerMessage.videoUrl ? (
+            <>
+              <video
+                src={viewerMessage.videoUrl}
+                controls
+                playsInline
+                className="relative z-10 max-h-[calc(100dvh-8rem)] max-w-full"
+              />
+              {viewerMessage.content.trim() ? (
+                <div className="absolute inset-x-4 bottom-4 z-10 rounded-xl bg-black/70 px-4 py-3 text-center text-sm leading-relaxed text-white backdrop-blur-sm sm:inset-x-auto sm:max-w-lg">
+                  {viewerMessage.content}
+                </div>
+              ) : null}
+            </>
+          ) : viewerMessage.imageUrl ? (
             <>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img

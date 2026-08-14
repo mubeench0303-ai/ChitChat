@@ -24,8 +24,11 @@ const (
 	maxMessageImageSizeBytes       = 5 << 20
 	maxMessageVoiceSizeBytes       = 10 << 20
 	maxMessageVoiceDurationSeconds = 300
+	maxMessageVideoSizeBytes       = 100 << 20
+	maxMessageVideoDurationSeconds = 60
 	messageImageUploadFolder       = "chitchat/messages"
 	messageVoiceUploadFolder       = "chitchat/voice-messages"
+	messageVideoUploadFolder       = "chitchat/videos"
 	editWindowDuration       = 10 * time.Minute
 	unsendWindowDuration     = 1 * time.Hour
 	unsentMessagePlaceholder = "This message was unsent"
@@ -552,8 +555,10 @@ func (s *ConversationService) EditMessage(
 
 	if message.Type == models.MessageTypeImage ||
 		message.Type == models.MessageTypeVoice ||
+		message.Type == models.MessageTypeVideo ||
 		message.ImageURL != nil ||
-		message.AudioURL != nil {
+		message.AudioURL != nil ||
+		message.VideoURL != nil {
 		return nil, ErrMessageNotEditable
 	}
 
@@ -642,6 +647,16 @@ func (s *ConversationService) UnsendMessage(
 
 		if err := s.cloudinary.DeleteVideo(ctx, *message.AudioURL); err != nil {
 			return fmt.Errorf("conversation: failed to delete message voice: %w", err)
+		}
+	}
+
+	if message.VideoURL != nil && strings.TrimSpace(*message.VideoURL) != "" {
+		if s.cloudinary == nil {
+			return fmt.Errorf("conversation: video delete is not configured")
+		}
+
+		if err := s.cloudinary.DeleteVideo(ctx, *message.VideoURL); err != nil {
+			return fmt.Errorf("conversation: failed to delete message video: %w", err)
 		}
 	}
 
@@ -834,12 +849,14 @@ func (s *ConversationService) SendChatMessage(
 
 	if replyStatusTarget != nil {
 		message.ReplyToStatus = &models.MessageReplyToStatus{
-			ID:              replyStatusTarget.ID,
-			OwnerID:         replyStatusTarget.UserID,
-			Type:            replyStatusTarget.Type,
-			Content:         replyStatusTarget.Content,
-			ImageURL:        replyStatusTarget.ImageURL,
-			BackgroundColor: replyStatusTarget.BackgroundColor,
+			ID:                   replyStatusTarget.ID,
+			OwnerID:              replyStatusTarget.UserID,
+			Type:                 replyStatusTarget.Type,
+			Content:              replyStatusTarget.Content,
+			ImageURL:             replyStatusTarget.ImageURL,
+			VideoURL:             replyStatusTarget.VideoURL,
+			VideoDurationSeconds: replyStatusTarget.VideoDurationSeconds,
+			BackgroundColor:      replyStatusTarget.BackgroundColor,
 		}
 	}
 
@@ -1085,12 +1102,267 @@ func (s *ConversationService) SendVoiceMessage(
 
 	if replyStatusTarget != nil {
 		message.ReplyToStatus = &models.MessageReplyToStatus{
-			ID:              replyStatusTarget.ID,
-			OwnerID:         replyStatusTarget.UserID,
-			Type:            replyStatusTarget.Type,
-			Content:         replyStatusTarget.Content,
-			ImageURL:        replyStatusTarget.ImageURL,
-			BackgroundColor: replyStatusTarget.BackgroundColor,
+			ID:                   replyStatusTarget.ID,
+			OwnerID:              replyStatusTarget.UserID,
+			Type:                 replyStatusTarget.Type,
+			Content:              replyStatusTarget.Content,
+			ImageURL:             replyStatusTarget.ImageURL,
+			VideoURL:             replyStatusTarget.VideoURL,
+			VideoDurationSeconds: replyStatusTarget.VideoDurationSeconds,
+			BackgroundColor:      replyStatusTarget.BackgroundColor,
+		}
+	}
+
+	scrubMessage(message)
+
+	if err := s.conversations.TouchConversation(ctx, conversationID); err != nil {
+		return nil, fmt.Errorf("conversation: failed to update conversation: %w", err)
+	}
+
+	if s.notifications != nil {
+		senderName := ""
+		if sender, userErr := s.users.GetUserByID(ctx, userID.String()); userErr != nil {
+			log.Printf("conversation: failed to resolve sender name for notification: %v", userErr)
+		} else {
+			senderName = sender.FullName
+		}
+
+		payload := map[string]interface{}{
+			"conversationId": message.ConversationID,
+			"message":        messageToNotificationPayload(message, senderName),
+		}
+
+		recipientIDs, err := s.conversations.GetOtherMembers(ctx, conversationID, userID)
+		if err != nil {
+			log.Printf("conversation: failed to resolve notification recipients: %v", err)
+		} else {
+			if err := s.notifications.NotifyUsers(recipientIDs, "new_message", payload); err != nil {
+				log.Printf("conversation: failed to notify message recipients: %v", err)
+			}
+
+			messageUUID, parseErr := uuid.Parse(message.ID)
+			if parseErr != nil {
+				log.Printf("conversation: invalid message id for delivery mark: %v", parseErr)
+			} else if conversation.Type == models.ConversationTypeGroup {
+				for _, recipientID := range recipientIDs {
+					if !s.notifications.IsUserOnline(recipientID) {
+						continue
+					}
+					if err := s.conversations.MarkMessageDelivered(ctx, messageUUID, recipientID); err != nil {
+						log.Printf("conversation: failed to mark group message delivered for user %s: %v", recipientID, err)
+					}
+				}
+				s.pushGroupTickUpdates(ctx, conversationID, []uuid.UUID{messageUUID})
+			} else {
+				deliveredMarked := false
+				for _, recipientID := range recipientIDs {
+					if !deliveredMarked && s.notifications.IsUserOnline(recipientID) {
+						if err := s.conversations.MarkDirectMessageDelivered(ctx, messageUUID); err != nil {
+							log.Printf("conversation: failed to mark message delivered: %v", err)
+						} else {
+							now := time.Now()
+							message.DeliveredAt = &now
+							deliveredMarked = true
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if conversation.Type == models.ConversationTypeGroup {
+		messageUUID, parseErr := uuid.Parse(message.ID)
+		if parseErr != nil {
+			sent := "sent"
+			message.TickStatus = &sent
+		} else {
+			tickStatuses, tickErr := s.conversations.GetGroupMessageTickStatuses(
+				ctx,
+				conversationID,
+				[]uuid.UUID{messageUUID},
+			)
+			if tickErr != nil || len(tickStatuses) == 0 {
+				sent := "sent"
+				message.TickStatus = &sent
+			} else {
+				status := tickStatuses[0].Status
+				message.TickStatus = &status
+			}
+		}
+	} else {
+		applyMessageStatus(message, nil, userID.String())
+	}
+
+	return message, nil
+}
+
+func (s *ConversationService) SendVideoMessage(
+	ctx context.Context,
+	userID, conversationID uuid.UUID,
+	replyToMessageID *uuid.UUID,
+	replyToStatusID *uuid.UUID,
+	videoFile multipart.File,
+	videoFilename string,
+	clientDurationSeconds int,
+) (*models.Message, error) {
+	isParticipant, err := s.conversations.IsParticipant(ctx, conversationID, userID)
+	if err != nil {
+		return nil, fmt.Errorf("conversation: failed to check participant: %w", err)
+	}
+	if !isParticipant {
+		return nil, ErrNotAuthorized
+	}
+
+	conversation, err := s.conversations.GetByID(ctx, conversationID)
+	if errors.Is(err, repository.ErrNotFound) {
+		return nil, ErrConversationNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("conversation: failed to fetch conversation: %w", err)
+	}
+
+	if conversation.Type == models.ConversationTypeDirect {
+		if conversation.Status == nil || *conversation.Status != models.ConversationStatusAccepted {
+			return nil, ErrConversationNotAccepted
+		}
+
+		otherUserID, err := s.conversations.GetOtherParticipantID(ctx, conversationID, userID)
+		if err != nil {
+			return nil, fmt.Errorf("conversation: failed to resolve other participant: %w", err)
+		}
+
+		otherUser, err := s.users.GetUserByID(ctx, otherUserID.String())
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, ErrRecipientNoLongerExists
+		}
+		if err != nil {
+			return nil, fmt.Errorf("conversation: failed to load other participant: %w", err)
+		}
+
+		if otherUser.IsDeleted {
+			return nil, ErrRecipientNoLongerExists
+		}
+	}
+
+	if err := validateMessageVideoFile(videoFile); err != nil {
+		return nil, err
+	}
+
+	if s.cloudinary == nil {
+		return nil, fmt.Errorf("conversation: video upload is not configured")
+	}
+
+	uploadResult, err := s.cloudinary.UploadVideo(
+		ctx,
+		videoFile,
+		videoFilename,
+		messageVideoUploadFolder,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("conversation: failed to upload video message: %w", err)
+	}
+
+	durationSeconds := clientDurationSeconds
+	if uploadResult.Duration > 0 {
+		durationSeconds = int(math.Round(uploadResult.Duration))
+	}
+
+	if durationSeconds <= 0 {
+		return nil, ErrInvalidMessageVideoContentType
+	}
+
+	if durationSeconds > maxMessageVideoDurationSeconds {
+		return nil, ErrMessageVideoTooLong
+	}
+
+	if replyToMessageID != nil && replyToStatusID != nil {
+		return nil, ErrInvalidReplyTarget
+	}
+
+	var replyTarget *models.Message
+	if replyToMessageID != nil {
+		replyTarget, err = s.conversations.GetMessageByID(ctx, *replyToMessageID)
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, ErrInvalidReplyTarget
+		}
+		if err != nil {
+			return nil, fmt.Errorf("conversation: failed to get reply target: %w", err)
+		}
+		if replyTarget.ConversationID != conversationID.String() {
+			return nil, ErrInvalidReplyTarget
+		}
+	}
+
+	var replyStatusTarget *models.Status
+	if replyToStatusID != nil {
+		if s.statuses == nil {
+			return nil, ErrInvalidStatusReplyTarget
+		}
+
+		replyStatusTarget, err = s.statuses.GetStatusByID(ctx, *replyToStatusID)
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, ErrInvalidStatusReplyTarget
+		}
+		if err != nil {
+			return nil, fmt.Errorf("conversation: failed to get status reply target: %w", err)
+		}
+
+		statusOwnerID, parseErr := uuid.Parse(replyStatusTarget.UserID)
+		if parseErr != nil {
+			return nil, ErrInvalidStatusReplyTarget
+		}
+
+		isOwnerParticipant, participantErr := s.conversations.IsParticipant(
+			ctx,
+			conversationID,
+			statusOwnerID,
+		)
+		if participantErr != nil {
+			return nil, fmt.Errorf("conversation: failed to check status owner participant: %w", participantErr)
+		}
+		if !isOwnerParticipant {
+			return nil, ErrInvalidStatusReplyTarget
+		}
+
+		if conversation.Type == models.ConversationTypeDirect {
+			otherUserID, otherErr := s.conversations.GetOtherParticipantID(ctx, conversationID, userID)
+			if otherErr != nil {
+				return nil, fmt.Errorf("conversation: failed to resolve other participant: %w", otherErr)
+			}
+			if statusOwnerID != otherUserID {
+				return nil, ErrInvalidStatusReplyTarget
+			}
+		}
+	}
+
+	message, err := s.conversations.CreateVideoMessage(
+		ctx,
+		conversationID,
+		userID,
+		replyToMessageID,
+		replyToStatusID,
+		uploadResult.SecureURL,
+		durationSeconds,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("conversation: failed to create video message: %w", err)
+	}
+
+	if replyTarget != nil {
+		scrubMessage(replyTarget)
+		message.ReplyTo = messageToReplyTo(replyTarget)
+	}
+
+	if replyStatusTarget != nil {
+		message.ReplyToStatus = &models.MessageReplyToStatus{
+			ID:                   replyStatusTarget.ID,
+			OwnerID:              replyStatusTarget.UserID,
+			Type:                 replyStatusTarget.Type,
+			Content:              replyStatusTarget.Content,
+			ImageURL:             replyStatusTarget.ImageURL,
+			VideoURL:             replyStatusTarget.VideoURL,
+			VideoDurationSeconds: replyStatusTarget.VideoDurationSeconds,
+			BackgroundColor:      replyStatusTarget.BackgroundColor,
 		}
 	}
 
@@ -1189,6 +1461,7 @@ func messageToReplyTo(message *models.Message) *models.MessageReplyTo {
 		Content:  message.Content,
 		ImageURL: message.ImageURL,
 		AudioURL: message.AudioURL,
+		VideoURL: message.VideoURL,
 		IsUnsent: message.IsUnsent,
 	}
 }
@@ -1199,6 +1472,8 @@ func scrubMessage(message *models.Message) {
 		message.ImageURL = nil
 		message.AudioURL = nil
 		message.AudioDurationSeconds = nil
+		message.VideoURL = nil
+		message.VideoDurationSeconds = nil
 	}
 	if message.ReplyTo != nil && message.ReplyTo.IsUnsent {
 		message.ReplyTo.Content = unsentMessagePlaceholder
@@ -1236,6 +1511,12 @@ func messageToNotificationPayload(message *models.Message, senderName string) ma
 	if message.AudioDurationSeconds != nil {
 		payload["audioDurationSeconds"] = *message.AudioDurationSeconds
 	}
+	if message.VideoURL != nil {
+		payload["videoUrl"] = *message.VideoURL
+	}
+	if message.VideoDurationSeconds != nil {
+		payload["videoDurationSeconds"] = *message.VideoDurationSeconds
+	}
 	if message.ReplyTo != nil {
 		replyToPayload := map[string]interface{}{
 			"id":       message.ReplyTo.ID,
@@ -1252,17 +1533,25 @@ func messageToNotificationPayload(message *models.Message, senderName string) ma
 		if message.ReplyTo.AudioURL != nil {
 			replyToPayload["audioUrl"] = *message.ReplyTo.AudioURL
 		}
+		if message.ReplyTo.VideoURL != nil {
+			replyToPayload["videoUrl"] = *message.ReplyTo.VideoURL
+		}
 		payload["replyTo"] = replyToPayload
 	}
 	if message.ReplyToStatus != nil {
-		payload["replyToStatus"] = map[string]interface{}{
+		replyToStatusPayload := map[string]interface{}{
 			"id":              message.ReplyToStatus.ID,
 			"ownerId":         message.ReplyToStatus.OwnerID,
 			"type":            message.ReplyToStatus.Type,
 			"content":         message.ReplyToStatus.Content,
 			"imageUrl":        message.ReplyToStatus.ImageURL,
+			"videoUrl":        message.ReplyToStatus.VideoURL,
 			"backgroundColor": message.ReplyToStatus.BackgroundColor,
 		}
+		if message.ReplyToStatus.VideoDurationSeconds != nil {
+			replyToStatusPayload["videoDurationSeconds"] = *message.ReplyToStatus.VideoDurationSeconds
+		}
+		payload["replyToStatus"] = replyToStatusPayload
 	}
 	if message.TickStatus != nil {
 		payload["tickStatus"] = *message.TickStatus
@@ -1365,4 +1654,47 @@ func isAllowedVoiceContentType(contentType string) bool {
 	}
 
 	return strings.HasPrefix(contentType, "audio/")
+}
+
+func validateMessageVideoFile(file multipart.File) error {
+	header := make([]byte, 512)
+	n, err := file.Read(header)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return fmt.Errorf("conversation: failed to read video file: %w", err)
+	}
+
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("conversation: failed to reset video file reader: %w", err)
+	}
+
+	contentType := http.DetectContentType(header[:n])
+	if !isAllowedVideoContentType(contentType) {
+		return ErrInvalidMessageVideoContentType
+	}
+
+	size, err := file.Seek(0, io.SeekEnd)
+	if err != nil {
+		return fmt.Errorf("conversation: failed to determine video file size: %w", err)
+	}
+
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("conversation: failed to reset video file reader: %w", err)
+	}
+
+	if size > maxMessageVideoSizeBytes {
+		return ErrInvalidMessageVideoFileSize
+	}
+
+	return nil
+}
+
+func isAllowedVideoContentType(contentType string) bool {
+	contentType = strings.ToLower(strings.TrimSpace(contentType))
+
+	switch contentType {
+	case "video/mp4", "video/webm", "video/quicktime":
+		return true
+	}
+
+	return strings.HasPrefix(contentType, "video/")
 }

@@ -5,15 +5,18 @@ import "time"
 const (
 	StatusTypeText  = "text"
 	StatusTypeImage = "image"
+	StatusTypeVideo = "video"
 )
 
 type Status struct {
 	ID              string     `json:"id"`
 	UserID          string     `json:"userId"`
 	Type            string     `json:"type"`
-	Content         *string    `json:"content,omitempty"`
-	ImageURL        *string    `json:"imageUrl,omitempty"`
-	BackgroundColor *string    `json:"backgroundColor,omitempty"`
+	Content               *string    `json:"content,omitempty"`
+	ImageURL              *string    `json:"imageUrl,omitempty"`
+	VideoURL              *string    `json:"videoUrl,omitempty"`
+	VideoDurationSeconds  *int       `json:"videoDurationSeconds,omitempty"`
+	BackgroundColor       *string    `json:"backgroundColor,omitempty"`
 	CreatedAt       time.Time  `json:"createdAt"`
 }
 

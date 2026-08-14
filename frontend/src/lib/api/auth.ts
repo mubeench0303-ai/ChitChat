@@ -283,6 +283,48 @@ export function sendVoiceMessage(
   );
 }
 
+export function sendVideoMessage(
+  conversationId: string,
+  params: {
+    video: File;
+    durationSeconds: number;
+    replyToMessageId?: string;
+    replyToStatusId?: string;
+    onUploadProgress?: (percent: number) => void;
+  }
+): Promise<ChatMessage> {
+  const formData = new FormData();
+  formData.append("video", params.video);
+  formData.append("durationSeconds", String(params.durationSeconds));
+
+  if (params.replyToMessageId) {
+    formData.append("replyToMessageId", params.replyToMessageId);
+  }
+
+  if (params.replyToStatusId) {
+    formData.append("replyToStatusId", params.replyToStatusId);
+  }
+
+  return api.post<ChatMessage>(
+    `/conversations/${conversationId}/messages/video`,
+    formData,
+    {
+      headers: {
+        "Content-Type": "multipart/form-data",
+      },
+      onUploadProgress: (event) => {
+        if (!params.onUploadProgress || !event.total) {
+          return;
+        }
+
+        params.onUploadProgress(
+          Math.round((event.loaded * 100) / event.total)
+        );
+      },
+    }
+  );
+}
+
 export function deleteMessageForMe(messageId: string): Promise<void> {
   return api.delete<void>(`/messages/${messageId}/for-me`);
 }
@@ -409,10 +451,22 @@ export function removePrivacyException(
   );
 }
 
-export function createStatus(formData: FormData): Promise<Status> {
+export function createStatus(
+  formData: FormData,
+  options?: { onUploadProgress?: (percent: number) => void }
+): Promise<Status> {
   return api.post<Status>("/statuses", formData, {
     headers: {
       "Content-Type": "multipart/form-data",
+    },
+    onUploadProgress: (event) => {
+      if (!options?.onUploadProgress || !event.total) {
+        return;
+      }
+
+      options.onUploadProgress(
+        Math.round((event.loaded * 100) / event.total)
+      );
     },
   });
 }

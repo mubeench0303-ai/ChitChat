@@ -47,6 +47,7 @@ func (h *ConversationHandler) GetChatList(w http.ResponseWriter, r *http.Request
 
 const maxSendMessageMultipartBytes = 6 << 20 // 5MB image + form overhead
 const maxSendVoiceMultipartBytes = 11 << 20  // 10MB audio + form overhead
+const maxSendVideoMultipartBytes = 110 << 20 // 100MB video + form overhead
 const maxBackgroundMultipartBytes = 6 << 20
 
 type setBackgroundRequest struct {
@@ -331,6 +332,120 @@ func (h *ConversationHandler) SendVoiceMessage(w http.ResponseWriter, r *http.Re
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to send voice message")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, message)
+}
+
+func (h *ConversationHandler) SendVideoMessage(w http.ResponseWriter, r *http.Request) {
+	userIDStr, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	conversationID, err := uuid.Parse(chi.URLParam(r, "conversationId"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid conversation ID")
+		return
+	}
+
+	if err := r.ParseMultipartForm(maxSendVideoMultipartBytes); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid multipart form")
+		return
+	}
+
+	replyToRaw := strings.TrimSpace(r.FormValue("replyToMessageId"))
+	var replyToRawPtr *string
+	if replyToRaw != "" {
+		replyToRawPtr = &replyToRaw
+	}
+
+	replyToMessageID, err := parseOptionalMessageID(replyToRawPtr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid reply message ID")
+		return
+	}
+
+	replyToStatusRaw := strings.TrimSpace(r.FormValue("replyToStatusId"))
+	var replyToStatusRawPtr *string
+	if replyToStatusRaw != "" {
+		replyToStatusRawPtr = &replyToStatusRaw
+	}
+
+	replyToStatusID, err := parseOptionalMessageID(replyToStatusRawPtr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid reply status ID")
+		return
+	}
+
+	durationSeconds := 0
+	if durationRaw := strings.TrimSpace(r.FormValue("durationSeconds")); durationRaw != "" {
+		parsedDuration, parseErr := strconv.Atoi(durationRaw)
+		if parseErr != nil || parsedDuration < 0 {
+			writeError(w, http.StatusBadRequest, "Invalid duration value")
+			return
+		}
+		durationSeconds = parsedDuration
+	}
+
+	file, header, err := r.FormFile("video")
+	if err != nil {
+		if errors.Is(err, http.ErrMissingFile) {
+			writeError(w, http.StatusBadRequest, "Video message must include a video file")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "Expected a file field named \"video\"")
+		return
+	}
+	defer file.Close()
+
+	message, err := h.conversations.SendVideoMessage(
+		r.Context(),
+		userID,
+		conversationID,
+		replyToMessageID,
+		replyToStatusID,
+		file,
+		header.Filename,
+		durationSeconds,
+	)
+	if errors.Is(err, service.ErrNotAuthorized) {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrConversationNotFound) {
+		writeError(w, http.StatusNotFound, "Conversation not found")
+		return
+	}
+	if errors.Is(err, service.ErrConversationNotAccepted) {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrRecipientNoLongerExists) {
+		writeError(w, http.StatusGone, err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrInvalidReplyTarget) ||
+		errors.Is(err, service.ErrInvalidStatusReplyTarget) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrInvalidMessageVideoFileSize) ||
+		errors.Is(err, service.ErrInvalidMessageVideoContentType) ||
+		errors.Is(err, service.ErrMessageVideoTooLong) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to send video message")
 		return
 	}
 

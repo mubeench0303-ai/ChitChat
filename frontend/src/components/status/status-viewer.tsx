@@ -11,6 +11,8 @@ import {
   Loader2,
   Send,
   Trash2,
+  Volume2,
+  VolumeX,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -24,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { signupGradientBgClass } from "@/components/auth/signup-submit-button";
 import { StatusImageDisplay } from "@/components/status/status-image-display";
+import { StatusVideoDisplay } from "@/components/status/status-video-display";
 import { StatusViewersSheet } from "@/components/status/status-viewers-sheet";
 import {
   STATUS_DURATION_MS,
@@ -36,6 +39,7 @@ import {
   markStatusViewed,
   sendMessage,
 } from "@/lib/api/auth";
+import { MAX_VIDEO_MESSAGE_DURATION_SECONDS } from "@/lib/validations/video";
 import type { Status, StatusUserSequence, StatusViewerEntry } from "@/types";
 import { cn } from "@/lib/utils";
 
@@ -72,8 +76,11 @@ export function StatusViewerOverlay({
   const [isLoadingViewers, setIsLoadingViewers] = useState(false);
   const [viewersError, setViewersError] = useState<string | null>(null);
   const [viewerCount, setViewerCount] = useState<number | null>(null);
+  const [isVideoMuted, setIsVideoMuted] = useState(true);
+  const [videoProgress, setVideoProgress] = useState(0);
 
   const markedThisSessionRef = useRef<Set<string>>(new Set());
+  const videoRef = useRef<HTMLVideoElement>(null);
 
   const currentSequence = sequences[userIndex];
   const currentStatus = currentSequence?.statuses[statusIndex];
@@ -161,21 +168,67 @@ export function StatusViewerOverlay({
     }
   }, [currentSequence, resetTimer, sequences, statusIndex, userIndex]);
 
+  const isTimerPaused = isPaused || isReplyFocused || isDeleteDialogOpen;
+  const isVideoStatus = currentStatus?.type === "video";
+
+  const getVideoDurationSeconds = useCallback((status: Status) => {
+    if (status.videoDurationSeconds && status.videoDurationSeconds > 0) {
+      return Math.min(
+        status.videoDurationSeconds,
+        MAX_VIDEO_MESSAGE_DURATION_SECONDS
+      );
+    }
+
+    return MAX_VIDEO_MESSAGE_DURATION_SECONDS;
+  }, []);
+
+  const handleVideoTimeUpdate = useCallback(() => {
+    const video = videoRef.current;
+    if (!video || !currentStatus || currentStatus.type !== "video") {
+      return;
+    }
+
+    const durationSeconds = getVideoDurationSeconds(currentStatus);
+    const progress = Math.min(
+      100,
+      (video.currentTime / durationSeconds) * 100
+    );
+    setVideoProgress(progress);
+  }, [currentStatus, getVideoDurationSeconds]);
+
+  const handleVideoEnded = useCallback(() => {
+    goToNext();
+  }, [goToNext]);
+
   useEffect(() => {
     resetTimer();
     setIsPaused(false);
     setIsReplyFocused(false);
     setIsViewersOpen(false);
     setIsDeleteDialogOpen(false);
+    setIsVideoMuted(true);
+    setVideoProgress(0);
   }, [userIndex, statusIndex, resetTimer]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !isVideoStatus) {
+      return;
+    }
+
+    if (isTimerPaused) {
+      video.pause();
+      return;
+    }
+
+    void video.play().catch(() => {});
+  }, [isTimerPaused, isVideoStatus, userIndex, statusIndex]);
 
   useEffect(() => {
     if (currentStatus) {
       markRemoteViewed(currentStatus);
     }
   }, [currentStatus, markRemoteViewed]);
-
-  const isTimerPaused = isPaused || isReplyFocused || isDeleteDialogOpen;
 
   useEffect(() => {
     if (!sequences[userIndex] || sequences[userIndex].statuses.length === 0) {
@@ -313,19 +366,29 @@ export function StatusViewerOverlay({
             {index < statusIndex ? (
               <div className="h-full w-full origin-left scale-x-100 bg-white" />
             ) : index === statusIndex ? (
-              <div
-                key={`${userIndex}-${statusIndex}-${status.id}`}
-                className="status-progress-fill h-full w-full origin-left bg-white"
-                style={{
-                  animationDuration: `${STATUS_DURATION_MS}ms`,
-                  animationPlayState: isTimerPaused ? "paused" : "running",
-                }}
-                onAnimationEnd={() => {
-                  if (index === statusIndex) {
-                    goToNext();
-                  }
-                }}
-              />
+              status.type === "video" ? (
+                <div
+                  key={`${userIndex}-${statusIndex}-${status.id}`}
+                  className="h-full origin-left bg-white transition-[transform] duration-75 ease-linear"
+                  style={{
+                    transform: `scaleX(${Math.max(0, Math.min(1, videoProgress / 100))})`,
+                  }}
+                />
+              ) : (
+                <div
+                  key={`${userIndex}-${statusIndex}-${status.id}`}
+                  className="status-progress-fill h-full w-full origin-left bg-white"
+                  style={{
+                    animationDuration: `${STATUS_DURATION_MS}ms`,
+                    animationPlayState: isTimerPaused ? "paused" : "running",
+                  }}
+                  onAnimationEnd={() => {
+                    if (index === statusIndex) {
+                      goToNext();
+                    }
+                  }}
+                />
+              )
             ) : null}
           </div>
         ))}
@@ -422,6 +485,34 @@ export function StatusViewerOverlay({
                 {currentStatus.content}
               </p>
             </div>
+          ) : currentStatus.type === "video" && currentStatus.videoUrl ? (
+            <>
+              <StatusVideoDisplay
+                videoUrl={currentStatus.videoUrl}
+                caption={currentStatus.content}
+                className="absolute inset-0"
+                videoRef={videoRef}
+                muted={isVideoMuted}
+                autoPlay
+                onEnded={handleVideoEnded}
+                onTimeUpdate={handleVideoTimeUpdate}
+              />
+              <button
+                type="button"
+                aria-label={isVideoMuted ? "Unmute video" : "Mute video"}
+                className="absolute right-4 bottom-28 z-30 flex size-10 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-sm transition-ui hover:bg-black/60"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setIsVideoMuted((current) => !current);
+                }}
+              >
+                {isVideoMuted ? (
+                  <VolumeX className="size-4" strokeWidth={2} />
+                ) : (
+                  <Volume2 className="size-4" strokeWidth={2} />
+                )}
+              </button>
+            </>
           ) : currentStatus.imageUrl ? (
             <StatusImageDisplay
               src={currentStatus.imageUrl}

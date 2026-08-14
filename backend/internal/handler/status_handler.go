@@ -3,8 +3,10 @@ package handler
 import (
 	"errors"
 	"io"
+	"math"
 	"mime/multipart"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -17,6 +19,7 @@ import (
 )
 
 const maxStatusMultipartBytes = 6 << 20
+const maxStatusVideoMultipartBytes = 110 << 20
 
 const statusImageUploadFolder = "chitchat/statuses"
 
@@ -48,7 +51,7 @@ func (h *StatusHandler) CreateStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := r.ParseMultipartForm(maxStatusMultipartBytes); err != nil {
+	if err := r.ParseMultipartForm(maxStatusVideoMultipartBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "Invalid multipart form")
 		return
 	}
@@ -123,6 +126,78 @@ func (h *StatusHandler) CreateStatus(w http.ResponseWriter, r *http.Request) {
 			content,
 		)
 		if errors.Is(createErr, service.ErrStatusImageRequired) {
+			writeError(w, http.StatusBadRequest, createErr.Error())
+			return
+		}
+		if createErr != nil {
+			writeError(w, http.StatusInternalServerError, "Failed to create status")
+			return
+		}
+
+		writeJSON(w, http.StatusCreated, status)
+		return
+
+	case models.StatusTypeVideo:
+		durationSeconds := 0
+		if durationRaw := strings.TrimSpace(r.FormValue("durationSeconds")); durationRaw != "" {
+			parsedDuration, parseErr := strconv.Atoi(durationRaw)
+			if parseErr != nil || parsedDuration < 0 {
+				writeError(w, http.StatusBadRequest, "Invalid duration value")
+				return
+			}
+			durationSeconds = parsedDuration
+		}
+
+		file, header, fileErr := r.FormFile("video")
+		switch {
+		case fileErr == nil:
+			defer file.Close()
+		case errors.Is(fileErr, http.ErrMissingFile):
+			writeError(w, http.StatusBadRequest, "Video file is required for video status")
+			return
+		default:
+			writeError(w, http.StatusBadRequest, "Expected a file field named \"video\"")
+			return
+		}
+
+		if err := validateStatusVideoFile(file); err != nil {
+			if errors.Is(err, service.ErrInvalidMessageVideoContentType) ||
+				errors.Is(err, service.ErrInvalidMessageVideoFileSize) {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeError(w, http.StatusBadRequest, "Invalid video file")
+			return
+		}
+
+		if h.cloudinary == nil {
+			writeError(w, http.StatusInternalServerError, "Video upload is not configured")
+			return
+		}
+
+		uploadResult, uploadErr := h.cloudinary.UploadVideo(
+			r.Context(),
+			file,
+			header.Filename,
+			statusImageUploadFolder,
+		)
+		if uploadErr != nil {
+			writeError(w, http.StatusInternalServerError, "Failed to upload status video")
+			return
+		}
+
+		if uploadResult.Duration > 0 {
+			durationSeconds = int(math.Round(uploadResult.Duration))
+		}
+
+		status, createErr := h.statuses.CreateVideoStatus(
+			r.Context(),
+			userID,
+			uploadResult.SecureURL,
+			content,
+			durationSeconds,
+		)
+		if errors.Is(createErr, service.ErrStatusVideoRequired) {
 			writeError(w, http.StatusBadRequest, createErr.Error())
 			return
 		}
@@ -314,6 +389,46 @@ func validateStatusImageFile(file multipart.File) error {
 
 	if size == 0 {
 		return service.ErrInvalidMessageImageFileSize
+	}
+
+	return nil
+}
+
+func validateStatusVideoFile(file multipart.File) error {
+	header := make([]byte, 512)
+	n, err := file.Read(header)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+
+	contentType := http.DetectContentType(header[:n])
+	switch contentType {
+	case "video/mp4", "video/webm", "video/quicktime":
+	default:
+		if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(contentType)), "video/") {
+			return service.ErrInvalidMessageVideoContentType
+		}
+	}
+
+	size, err := file.Seek(0, io.SeekEnd)
+	if err != nil {
+		return err
+	}
+
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+
+	if size > 100<<20 {
+		return service.ErrInvalidMessageVideoFileSize
+	}
+
+	if size == 0 {
+		return service.ErrInvalidMessageVideoFileSize
 	}
 
 	return nil

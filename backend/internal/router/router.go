@@ -85,6 +85,7 @@ func New(
 			protected.Get("/conversations/{conversationId}/info", conversationHandler.GetConversationHeaderInfo)
 			protected.Post("/conversations/{conversationId}/messages", conversationHandler.SendMessage)
 			protected.Post("/conversations/{conversationId}/messages/voice", conversationHandler.SendVoiceMessage)
+			protected.Post("/conversations/{conversationId}/messages/video", conversationHandler.SendVideoMessage)
 			protected.Post("/conversations/{conversationId}/read", conversationHandler.MarkRead)
 			protected.Get("/messages/{messageId}/info", conversationHandler.GetMessageInfo)
 			protected.Delete("/messages/{messageId}/for-me", conversationHandler.DeleteMessageForMe)

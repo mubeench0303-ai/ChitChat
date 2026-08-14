@@ -121,7 +121,7 @@ export interface GroupInfoResponse {
   members: GroupMemberDetail[];
 }
 
-export type MessageType = "text" | "image" | "voice";
+export type MessageType = "text" | "image" | "voice" | "video";
 
 export interface MessageReplyTo {
   id: string;
@@ -130,15 +130,18 @@ export interface MessageReplyTo {
   content: string;
   imageUrl?: string | null;
   audioUrl?: string | null;
+  videoUrl?: string | null;
   isUnsent?: boolean;
 }
 
 export interface MessageReplyToStatus {
   id: string;
   ownerId: string;
-  type: "text" | "image";
+  type: "text" | "image" | "video";
   content?: string | null;
   imageUrl?: string | null;
+  videoUrl?: string | null;
+  videoDurationSeconds?: number | null;
   backgroundColor?: string | null;
 }
 
@@ -174,6 +177,8 @@ export interface ChatMessage {
   imageUrl?: string | null;
   audioUrl?: string | null;
   audioDurationSeconds?: number | null;
+  videoUrl?: string | null;
+  videoDurationSeconds?: number | null;
   isUploading?: boolean;
   isEdited?: boolean;
   isUnsent?: boolean;
@@ -284,7 +289,7 @@ export interface PrivacyExceptionUser {
   avatarUrl?: string | null;
 }
 
-export type StatusType = "text" | "image";
+export type StatusType = "text" | "image" | "video";
 
 export interface Status {
   id: string;
@@ -292,6 +297,8 @@ export interface Status {
   type: StatusType;
   content?: string | null;
   imageUrl?: string | null;
+  videoUrl?: string | null;
+  videoDurationSeconds?: number | null;
   backgroundColor?: string | null;
   createdAt: string;
 }

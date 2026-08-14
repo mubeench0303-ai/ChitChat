@@ -6,6 +6,7 @@ const (
 	MessageTypeText  = "text"
 	MessageTypeImage = "image"
 	MessageTypeVoice = "voice"
+	MessageTypeVideo = "video"
 )
 
 type MessageReplyTo struct {
@@ -15,6 +16,7 @@ type MessageReplyTo struct {
 	Content  string  `json:"content"`
 	ImageURL *string `json:"imageUrl,omitempty"`
 	AudioURL *string `json:"audioUrl,omitempty"`
+	VideoURL *string `json:"videoUrl,omitempty"`
 	IsUnsent bool    `json:"isUnsent,omitempty"`
 }
 
@@ -24,7 +26,9 @@ type MessageReplyToStatus struct {
 	Type            string  `json:"type"`
 	Content         *string `json:"content,omitempty"`
 	ImageURL        *string `json:"imageUrl,omitempty"`
-	BackgroundColor *string `json:"backgroundColor,omitempty"`
+	VideoURL             *string `json:"videoUrl,omitempty"`
+	VideoDurationSeconds *int    `json:"videoDurationSeconds,omitempty"`
+	BackgroundColor      *string `json:"backgroundColor,omitempty"`
 }
 
 type Message struct {
@@ -36,6 +40,8 @@ type Message struct {
 	ImageURL              *string               `json:"imageUrl,omitempty"`
 	AudioURL              *string               `json:"audioUrl,omitempty"`
 	AudioDurationSeconds  *int                  `json:"audioDurationSeconds,omitempty"`
+	VideoURL              *string               `json:"videoUrl,omitempty"`
+	VideoDurationSeconds  *int                  `json:"videoDurationSeconds,omitempty"`
 	IsEdited              bool                  `json:"isEdited"`
 	IsUnsent         bool                  `json:"isUnsent"`
 	ReplyToMessageID *string               `json:"replyToMessageId,omitempty"`
