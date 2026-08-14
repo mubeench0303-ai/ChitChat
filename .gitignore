@@ -10,6 +10,7 @@ frontend/.env
 frontend/.env.local
 backend/.env
 backend/.env.backup
+backend/cd backend.txt
 
 # ==========================
 # Go
