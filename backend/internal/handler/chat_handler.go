@@ -361,6 +361,10 @@ func (h *ConversationHandler) DeleteMessageForMe(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}
+	if errors.Is(err, service.ErrPendingMessageModification) {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
 	if errors.Is(err, service.ErrMessageNotFound) {
 		writeError(w, http.StatusNotFound, "Message not found")
 		return
@@ -404,6 +408,10 @@ func (h *ConversationHandler) EditMessage(w http.ResponseWriter, r *http.Request
 
 	message, err := h.conversations.EditMessage(r.Context(), userID, messageID, req.Content)
 	if errors.Is(err, service.ErrNotAuthorized) {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrPendingMessageModification) {
 		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}
@@ -453,6 +461,10 @@ func (h *ConversationHandler) UnsendMessage(w http.ResponseWriter, r *http.Reque
 
 	err = h.conversations.UnsendMessage(r.Context(), userID, messageID)
 	if errors.Is(err, service.ErrNotAuthorized) {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrPendingMessageModification) {
 		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}

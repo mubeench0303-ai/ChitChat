@@ -13,6 +13,7 @@ import {
   AvatarImage,
 } from "@/components/ui/avatar";
 import { getIncomingRequests } from "@/lib/api/auth";
+import { subscribe } from "@/lib/ws/socket";
 import { useAuthStore } from "@/store/auth-store";
 import { cn } from "@/lib/utils";
 
@@ -143,8 +144,13 @@ export function Sidebar({ onNavigate, className }: SidebarProps) {
 
     void loadRequestCount();
 
+    const unsubscribe = subscribe("request_received", () => {
+      setPendingRequestCount((current) => current + 1);
+    });
+
     return () => {
       cancelled = true;
+      unsubscribe();
     };
   }, [pathname]);
 

@@ -370,10 +370,10 @@ export function VoiceRecorder({
 
   if (mode === "recording" || mode === "locked") {
     return (
-      <div className="flex w-full items-center gap-2">
+      <div className="flex min-w-0 w-full items-center gap-2">
         <div
           className={cn(
-            "flex min-h-10 flex-1 items-center gap-3 rounded-xl border px-3 py-2 transition-transform",
+            "flex min-h-10 min-w-0 flex-1 items-center gap-2 rounded-xl border px-2.5 py-2 transition-transform sm:gap-3 sm:px-3",
             isCancelArmed
               ? "border-destructive/50 bg-destructive/5"
               : "border-border/70 bg-surface-1/50"
@@ -406,16 +406,16 @@ export function VoiceRecorder({
           {mode === "recording" ? (
             <span
               className={cn(
-                "shrink-0 text-[11px]",
+                "hidden shrink-0 text-[11px] sm:inline",
                 isCancelArmed ? "text-destructive" : "text-text-muted"
               )}
             >
-              {isCancelArmed ? "Release to cancel" : "< Slide to cancel"}
+              {isCancelArmed ? "Release to cancel" : "Slide to cancel"}
             </span>
           ) : (
             <span className="inline-flex shrink-0 items-center gap-1 text-[11px] text-text-muted">
               <Lock className="size-3" strokeWidth={2} />
-              Locked
+              <span className="hidden sm:inline">Locked</span>
             </span>
           )}
         </div>

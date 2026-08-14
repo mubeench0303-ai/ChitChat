@@ -113,7 +113,7 @@ function ResetPasswordPageContent() {
           {emailFromQuery ? (
             <>
               Enter the code sent to{" "}
-              <span className="font-medium text-text-primary">
+              <span className="break-all font-medium text-text-primary">
                 {emailFromQuery}
               </span>
             </>

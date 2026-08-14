@@ -751,7 +751,7 @@ function PrivacySubHeader({
       <button
         type="button"
         onClick={onBack}
-        className="mb-3 inline-flex items-center gap-1.5 rounded-lg px-1 py-1 text-[13px] font-medium text-text-secondary transition-ui hover:bg-surface-hover hover:text-text-primary"
+        className="mb-3 hidden items-center gap-1.5 rounded-lg px-1 py-1 text-[13px] font-medium text-text-secondary transition-ui hover:bg-surface-hover hover:text-text-primary lg:inline-flex"
       >
         <ArrowLeft className="size-4" strokeWidth={2} />
         Back

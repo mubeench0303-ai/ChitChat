@@ -244,7 +244,7 @@ export default function StatusPage() {
           <h1 className="text-xl font-semibold tracking-[-0.02em] text-text-primary">
             Status
           </h1>
-          <p className="mt-1 text-[13px] text-text-secondary">
+          <p className="mt-1 hidden text-[13px] text-text-secondary sm:block">
             Share updates that disappear after 24 hours
           </p>
         </header>

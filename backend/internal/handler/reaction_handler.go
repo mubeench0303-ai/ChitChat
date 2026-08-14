@@ -46,6 +46,10 @@ func (h *ConversationHandler) ToggleReaction(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}
+	if errors.Is(err, service.ErrPendingMessageModification) {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
 	if errors.Is(err, service.ErrMessageNotFound) {
 		writeError(w, http.StatusNotFound, "Message not found")
 		return

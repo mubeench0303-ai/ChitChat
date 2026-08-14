@@ -299,7 +299,7 @@ export function StatusViewerOverlay({
 
   return (
     <div
-      className="fixed inset-0 z-100 flex flex-col bg-black text-white"
+      className="fixed inset-0 z-100 flex flex-col bg-black pt-[env(safe-area-inset-top)] text-white"
       role="dialog"
       aria-modal="true"
       aria-label="Status viewer"
@@ -418,7 +418,7 @@ export function StatusViewerOverlay({
                 backgroundColor: currentStatus.backgroundColor ?? "#ff404f",
               }}
             >
-              <p className="text-xl font-semibold leading-relaxed whitespace-pre-wrap">
+              <p className="text-xl font-semibold leading-relaxed break-words whitespace-pre-wrap [overflow-wrap:anywhere]">
                 {currentStatus.content}
               </p>
             </div>
@@ -436,7 +436,7 @@ export function StatusViewerOverlay({
       </div>
 
       {isOwn ? (
-        <div className="absolute inset-x-0 bottom-0 z-20 flex justify-center px-4 pb-6">
+        <div className="absolute inset-x-0 bottom-0 z-20 flex justify-center px-4 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
           <button
             type="button"
             onClick={() => {
@@ -449,13 +449,13 @@ export function StatusViewerOverlay({
           </button>
         </div>
       ) : (
-        <div className="absolute inset-x-0 bottom-0 z-20 border-t border-white/10 bg-black/70 px-4 py-3 backdrop-blur-sm">
+        <div className="absolute inset-x-0 bottom-0 z-20 border-t border-white/10 bg-black/70 px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur-sm">
           <div className="mx-auto flex max-w-md items-center gap-2">
             <Input
               value={replyText}
               onChange={(event) => setReplyText(event.target.value)}
               placeholder="Reply..."
-              className="border-white/15 bg-white/10 text-white placeholder:text-white/50"
+              className="min-w-0 flex-1 border-white/15 bg-white/10 text-white placeholder:text-white/50"
               onFocus={() => setIsReplyFocused(true)}
               onBlur={() => setIsReplyFocused(false)}
               onKeyDown={(event) => {

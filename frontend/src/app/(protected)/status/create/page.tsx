@@ -153,7 +153,7 @@ export default function CreateStatusPage() {
               className="flex min-h-[280px] items-center justify-center rounded-[13px] px-6 py-10 text-center shadow-sm"
               style={{ backgroundColor }}
             >
-              <p className="text-xl font-semibold leading-relaxed whitespace-pre-wrap text-white">
+              <p className="px-1 text-xl font-semibold leading-relaxed break-words whitespace-pre-wrap text-white [overflow-wrap:anywhere]">
                 {textContent.trim() || "Your status preview"}
               </p>
             </div>

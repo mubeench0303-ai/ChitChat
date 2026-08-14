@@ -7,7 +7,7 @@ import { motion, useReducedMotion } from "framer-motion";
 import { ArrowLeft, Search } from "lucide-react";
 
 import { AuthCard } from "@/components/auth/auth-card";
-import { AuthShell } from "@/components/auth/auth-shell";
+import { ProtectedPageFrame } from "@/components/layout/protected-page-frame";
 import { SignupTextInput } from "@/components/auth/signup-field";
 import {
   signupGradientBgClass,
@@ -171,8 +171,7 @@ export default function SearchPage() {
   }
 
   return (
-    <div className="h-full overflow-y-auto">
-      <AuthShell className="min-h-full">
+    <ProtectedPageFrame>
       <AuthCard aria-labelledby="search-title">
         <Link
           href="/chat"
@@ -217,7 +216,7 @@ export default function SearchPage() {
           <SignupTextInput
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search by name or @username"
+            placeholder="Mubeen Admin"
             autoComplete="off"
             leadingIcon={<Search className="size-4" strokeWidth={2} />}
           />
@@ -265,7 +264,6 @@ export default function SearchPage() {
           ) : null}
         </motion.div>
       </AuthCard>
-      </AuthShell>
-    </div>
+    </ProtectedPageFrame>
   );
 }

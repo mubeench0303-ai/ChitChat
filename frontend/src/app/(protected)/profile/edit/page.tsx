@@ -10,7 +10,7 @@ import { AlertCircle, ArrowLeft, User, UserRound } from "lucide-react";
 import { toast } from "sonner";
 
 import { AuthCard, fieldHintClassName } from "@/components/auth/auth-card";
-import { AuthShell } from "@/components/auth/auth-shell";
+import { ProtectedPageFrame } from "@/components/layout/protected-page-frame";
 import {
   SignupTextInput,
   SignupTextarea,
@@ -62,8 +62,7 @@ function isUsernameFormatValid(username: string) {
 
 function EditProfileSkeleton() {
   return (
-    <div className="h-full overflow-y-auto">
-      <AuthShell className="min-h-full">
+    <ProtectedPageFrame>
       <AuthCard>
         <div className="mt-7 space-y-4">
           <Skeleton className="h-4 w-24" />
@@ -74,8 +73,7 @@ function EditProfileSkeleton() {
           <Skeleton className="h-[51px] w-full rounded-[14px]" />
         </div>
       </AuthCard>
-      </AuthShell>
-    </div>
+    </ProtectedPageFrame>
   );
 }
 
@@ -193,8 +191,7 @@ export default function EditProfilePage() {
   }
 
   return (
-    <div className="h-full overflow-y-auto">
-      <AuthShell className="min-h-full">
+    <ProtectedPageFrame>
       <AuthCard aria-labelledby="edit-profile-title">
         <Link
           href="/profile"
@@ -355,7 +352,6 @@ export default function EditProfilePage() {
           </motion.form>
         </Form>
       </AuthCard>
-      </AuthShell>
-    </div>
+    </ProtectedPageFrame>
   );
 }

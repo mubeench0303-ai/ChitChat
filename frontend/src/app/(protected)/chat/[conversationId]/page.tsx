@@ -1,14 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Check, CheckCheck, ImageIcon, Info, Loader2, Mic, MoreVertical, Palette, Send, Smile, Users, X } from "lucide-react";
 import { toast } from "sonner";
 
 import {
   signupGradientBgClass,
-  signupGradientTextClass,
 } from "@/components/auth/signup-submit-button";
 import { ChatBackgroundDialog } from "@/components/chat/chat-background-dialog";
 import { VoiceMessageBubble } from "@/components/chat/voice-message-bubble";
@@ -36,7 +35,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
-import { getConversationHeaderInfo, getGroupInfo, getMessageInfo, getMessages, sendMessage, sendVoiceMessage, deleteMessageForMe, editMessage, unsendMessage, markConversationRead, toggleReaction } from "@/lib/api/auth";
+import { getConversationHeaderInfo, getGroupInfo, getMessageInfo, getMessages, sendMessage, sendVoiceMessage, deleteMessageForMe, editMessage, unsendMessage, markConversationRead, toggleReaction, acceptRequest, rejectRequest, blockRequest } from "@/lib/api/auth";
+import { sendMessageRequest } from "@/lib/api/conversations";
 import { getApiErrorStatus } from "@/lib/api/errors";
 import { getChatBackgroundStyle } from "@/lib/chat-backgrounds";
 import { chatMessageSchema } from "@/lib/validations/conversation";
@@ -769,6 +769,7 @@ function MessageBubble({
   onImageClick,
   onToggleReaction,
   onInfoRequest,
+  actionsLocked = false,
 }: {
   message: ChatMessage;
   isSent: boolean;
@@ -786,6 +787,7 @@ function MessageBubble({
   onImageClick: (message: ChatMessage) => void;
   onToggleReaction: (messageId: string, emoji: string) => void;
   onInfoRequest?: (message: ChatMessage) => void;
+  actionsLocked?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -1132,7 +1134,7 @@ function MessageBubble({
           </p>
         </div>
 
-        {!isEditing && !isUnsent ? (
+        {!actionsLocked && !isEditing && !isUnsent ? (
         <div className="mt-0.5 flex shrink-0 flex-col gap-0.5">
         <DropdownMenu open={reactionMenuOpen} onOpenChange={setReactionMenuOpen}>
         <DropdownMenuTrigger
@@ -1149,7 +1151,7 @@ function MessageBubble({
         </DropdownMenuTrigger>
         <DropdownMenuContent
           align={isSent ? "end" : "start"}
-          className="flex w-auto min-w-0 flex-row gap-0.5 p-1"
+          className="flex w-auto min-w-0 max-w-[calc(100vw-2rem)] flex-row flex-wrap justify-center gap-0.5 p-1"
         >
           {REACTION_EMOJIS.map((emoji) => (
             <button
@@ -1220,8 +1222,13 @@ function MessageBubble({
 
 export default function ConversationPage() {
   const params = useParams<{ conversationId: string }>();
+  const searchParams = useSearchParams();
+  const router = useRouter();
   const conversationId =
     typeof params.conversationId === "string" ? params.conversationId : "";
+  const isFromRequests = searchParams.get("from") === "requests";
+  const backHref = isFromRequests ? "/requests" : "/chat";
+  const backLabel = isFromRequests ? "Back to requests" : "Back to chats";
 
   const currentUser = useAuthStore((state) => state.user);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -1264,6 +1271,12 @@ export default function ConversationPage() {
   const [isInfoLoading, setIsInfoLoading] = useState(false);
   const [infoError, setInfoError] = useState<string | null>(null);
   const [isBackgroundDialogOpen, setIsBackgroundDialogOpen] = useState(false);
+  const [pendingRequestAction, setPendingRequestAction] = useState<
+    "accept" | "reject" | "block" | null
+  >(null);
+  const [pendingRequestError, setPendingRequestError] = useState<string | null>(
+    null
+  );
 
   const trimmedInput = inputValue.trim();
   const hasComposerContent = trimmedInput.length > 0;
@@ -1274,8 +1287,45 @@ export default function ConversationPage() {
     !contentTooLong &&
     !isSending &&
     !isVoiceRecording;
+  const isGroupChat = headerInfo?.type === "group";
+  const isPendingConversation =
+    !isGroupChat && headerInfo?.status === "pending";
+  const isPendingRequester =
+    isPendingConversation &&
+    Boolean(currentUser?.id) &&
+    headerInfo?.requestedBy === currentUser?.id;
+  const isPendingRecipient =
+    isPendingConversation && !isPendingRequester;
+  const participantUsername = headerInfo?.participantUsername;
+  const pendingSentCount = useMemo(() => {
+    if (!currentUser?.id) {
+      return 0;
+    }
+
+    return messages.filter(
+      (message) => message.senderId === currentUser.id && !message.isUnsent
+    ).length;
+  }, [currentUser?.id, messages]);
+  const hasReachedPendingLimit = isPendingRequester && pendingSentCount >= 3;
+  const canSendPendingRequest =
+    isPendingRequester &&
+    hasComposerContent &&
+    !contentTooLong &&
+    !isSending &&
+    !hasReachedPendingLimit &&
+    Boolean(participantUsername);
+  const canSendMessage =
+    isPendingRequester ? canSendPendingRequest : canSend;
   const showMicInsteadOfSend =
     !hasComposerContent && !hasComposerImage && !isVoiceRecording;
+  const showMicInsteadOfSendPending =
+    isPendingRequester &&
+    !hasComposerContent &&
+    !hasComposerImage &&
+    !isVoiceRecording;
+  const showMicInsteadOfSendFinal = isPendingRequester
+    ? showMicInsteadOfSendPending
+    : showMicInsteadOfSend;
   const charCount = trimmedInput.length;
   const showCharWarning = charCount > 1900;
 
@@ -1878,7 +1928,7 @@ export default function ConversationPage() {
   }, [viewerMessage]);
 
   async function handleSend() {
-    if (!canSend || !conversationId) {
+    if (!canSendMessage || !conversationId) {
       return;
     }
 
@@ -1893,11 +1943,27 @@ export default function ConversationPage() {
     setSendError(null);
 
     try {
-      const createdMessage = await sendMessage(conversationId, {
-        content: hasComposerContent ? trimmedInput : undefined,
-        image: selectedImage ?? undefined,
-        replyToMessageId: replyingTo?.id,
-      });
+      let createdMessage: ChatMessage;
+
+      if (isPendingRequester && participantUsername) {
+        const message = await sendMessageRequest(participantUsername, trimmedInput);
+        createdMessage = {
+          id: message.id,
+          conversationId: message.conversationId,
+          senderId: message.senderId,
+          type: "text",
+          content: message.content,
+          createdAt: message.createdAt,
+          updatedAt: message.updatedAt,
+        };
+      } else {
+        createdMessage = await sendMessage(conversationId, {
+          content: hasComposerContent ? trimmedInput : undefined,
+          image: selectedImage ?? undefined,
+          replyToMessageId: replyingTo?.id,
+        });
+      }
+
       setMessages((current) => [...current, createdMessage]);
       requestAnimationFrame(() => {
         scrollMessagesToBottom(
@@ -2118,7 +2184,6 @@ export default function ConversationPage() {
     }
   }
 
-  const isGroupChat = headerInfo?.type === "group";
   const headerName = isGroupChat
     ? headerInfo?.groupName?.trim() || "Group"
     : headerInfo?.participantFullName ?? "Chat";
@@ -2130,12 +2195,17 @@ export default function ConversationPage() {
     : headerInfo?.participantAvatarUrl;
   const participantIsOnline = headerInfo?.participantIsOnline;
   const participantLastSeen = headerInfo?.participantLastSeen ?? null;
-  const presenceVisible = participantIsOnline !== undefined;
-  const participantUsername = headerInfo?.participantUsername;
   const groupMemberCount = headerInfo?.memberCount ?? groupMembers.length;
   const groupInfoHref = conversationId
     ? `/groups/${encodeURIComponent(conversationId)}`
     : "/chat";
+  const participantProfileHref =
+    !isGroupChat && participantUsername
+      ? `/users/${encodeURIComponent(participantUsername)}?from=chat&conversationId=${encodeURIComponent(conversationId)}`
+      : null;
+  const headerProfileHref = isGroupChat
+    ? groupInfoHref
+    : participantProfileHref;
 
   const senderNameById = useMemo(() => {
     const map = new Map<string, string>();
@@ -2177,15 +2247,56 @@ export default function ConversationPage() {
     );
   }
 
+  async function handlePendingRequestAction(
+    action: "accept" | "reject" | "block"
+  ) {
+    if (!conversationId || pendingRequestAction) {
+      return;
+    }
+
+    const apiCall =
+      action === "accept"
+        ? acceptRequest
+        : action === "reject"
+          ? rejectRequest
+          : blockRequest;
+    const successMessage =
+      action === "accept"
+        ? "Request accepted"
+        : action === "reject"
+          ? "Request rejected"
+          : "User blocked";
+
+    setPendingRequestAction(action);
+    setPendingRequestError(null);
+
+    try {
+      await apiCall(conversationId);
+      toast.success(successMessage);
+      if (action === "accept") {
+        router.push(`/chat/${encodeURIComponent(conversationId)}`);
+      } else {
+        router.push("/requests");
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Something went wrong";
+      setPendingRequestError(message);
+      toast.error(message);
+    } finally {
+      setPendingRequestAction(null);
+    }
+  }
+
   return (
     <VoicePlaybackProvider>
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
-      <header className="shrink-0 border-b border-border/70 bg-background/95 px-4 py-3 backdrop-blur-sm sm:px-6">
+      <header className="shrink-0 border-b border-border/70 bg-background/95 px-3 py-2.5 backdrop-blur-sm sm:px-6 sm:py-3">
         <div className="mx-auto flex w-full max-w-2xl items-center gap-3">
           <Link
-            href="/chat"
+            href={backHref}
             className="inline-flex shrink-0 items-center justify-center rounded-lg p-1.5 text-text-muted transition-opacity hover:opacity-80"
-            aria-label="Back to chats"
+            aria-label={backLabel}
           >
             <ArrowLeft className="size-5" strokeWidth={2} />
           </Link>
@@ -2206,18 +2317,13 @@ export default function ConversationPage() {
             </div>
           ) : (
             <>
+              {headerProfileHref && !isDeletedParticipant ? (
               <Link
-                href={isGroupChat ? groupInfoHref : "#"}
-                onClick={(event) => {
-                  if (!isGroupChat) {
-                    event.preventDefault();
-                  }
-                }}
-                className={cn(
-                  "flex min-w-0 flex-1 items-center gap-3",
-                  isGroupChat && "transition-opacity hover:opacity-85"
-                )}
-                aria-label={isGroupChat ? "Open group info" : undefined}
+                href={headerProfileHref}
+                className="flex min-w-0 flex-1 items-center gap-3 transition-opacity hover:opacity-85"
+                aria-label={
+                  isGroupChat ? "Open group info" : "View profile"
+                }
               >
                 <div className="relative shrink-0">
                   <Avatar className="size-10">
@@ -2249,27 +2355,43 @@ export default function ConversationPage() {
                       {groupMemberCount}{" "}
                       {groupMemberCount === 1 ? "member" : "members"}
                     </p>
-                  ) : participantUsername ? (
-                    <p
-                      className={cn(
-                        "truncate text-xs font-medium",
-                        signupGradientTextClass
-                      )}
-                    >
-                      @{participantUsername}
-                    </p>
-                  ) : null}
-                  {!isGroupChat && presenceVisible ? (
+                  ) : (
                     <p className="truncate text-xs text-text-muted">
                       {participantIsOnline
                         ? "Online"
                         : participantLastSeen
                           ? `Last seen ${formatLastSeen(participantLastSeen)}`
-                          : "Offline"}
+                          : participantUsername
+                            ? `@${participantUsername}`
+                            : "Offline"}
                     </p>
-                  ) : null}
+                  )}
                 </div>
               </Link>
+              ) : (
+              <div className="flex min-w-0 flex-1 items-center gap-3">
+                <div className="relative shrink-0">
+                  <Avatar className="size-10">
+                    {headerAvatarUrl ? (
+                      <AvatarImage src={headerAvatarUrl} alt={headerName} />
+                    ) : null}
+                    <AvatarFallback
+                      className={cn(
+                        "text-sm font-semibold text-white",
+                        signupGradientBgClass
+                      )}
+                    >
+                      {headerInitials}
+                    </AvatarFallback>
+                  </Avatar>
+                </div>
+                <div className="min-w-0 flex-1 overflow-hidden">
+                  <p className="truncate text-sm font-semibold text-text-primary">
+                    {headerName}
+                  </p>
+                </div>
+              </div>
+              )}
             </>
           )}
 
@@ -2300,7 +2422,7 @@ export default function ConversationPage() {
         </div>
       </header>
 
-      <div className="relative mx-auto flex min-h-0 w-full max-w-2xl flex-1 flex-col px-4 sm:px-6">
+      <div className="relative mx-auto flex min-h-0 w-full max-w-2xl flex-1 flex-col px-3 sm:px-6">
         {chatBackgroundStyle ? (
           <div
             aria-hidden
@@ -2384,6 +2506,7 @@ export default function ConversationPage() {
                           void handleToggleReaction(messageId, emoji)
                         }
                         onInfoRequest={handleInfoRequest}
+                        actionsLocked={isPendingConversation}
                       />
                       );
                     })}
@@ -2402,10 +2525,65 @@ export default function ConversationPage() {
           ) : null}
         </div>
 
-        <div className="shrink-0 border-t border-border/70 bg-background py-3">
-          {isDeletedParticipant ? (
+        <div className="shrink-0 border-t border-border/70 bg-background py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+          {isPendingRecipient ? (
+            <div className="space-y-2">
+              {pendingRequestError ? (
+                <p className="rounded-[13px] border border-border/70 bg-surface-1/50 px-3 py-2 text-[13px] leading-relaxed text-accent">
+                  {pendingRequestError}
+                </p>
+              ) : null}
+              <p className="text-center text-[13px] leading-relaxed text-text-secondary">
+                Accept this request to reply, or reject/block to stop messages.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  className="min-w-0 flex-1"
+                  disabled={pendingRequestAction !== null}
+                  onClick={() => void handlePendingRequestAction("accept")}
+                >
+                  {pendingRequestAction === "accept" ? (
+                    <Loader2 className="size-4 animate-spin" strokeWidth={2} />
+                  ) : (
+                    "Accept"
+                  )}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="min-w-0 flex-1"
+                  disabled={pendingRequestAction !== null}
+                  onClick={() => void handlePendingRequestAction("reject")}
+                >
+                  {pendingRequestAction === "reject" ? (
+                    <Loader2 className="size-4 animate-spin" strokeWidth={2} />
+                  ) : (
+                    "Reject"
+                  )}
+                </Button>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  className="min-w-0 flex-1"
+                  disabled={pendingRequestAction !== null}
+                  onClick={() => void handlePendingRequestAction("block")}
+                >
+                  {pendingRequestAction === "block" ? (
+                    <Loader2 className="size-4 animate-spin" strokeWidth={2} />
+                  ) : (
+                    "Block"
+                  )}
+                </Button>
+              </div>
+            </div>
+          ) : isDeletedParticipant ? (
             <div className="rounded-[13px] border border-border/70 bg-surface-1/40 px-3.5 py-3 text-center text-[13px] leading-relaxed text-text-secondary">
               You can&apos;t message this user — this account no longer exists.
+            </div>
+          ) : hasReachedPendingLimit ? (
+            <div className="rounded-[13px] border border-border/70 bg-surface-1/40 px-3.5 py-3 text-center text-[13px] leading-relaxed text-text-secondary">
+              You&apos;ve sent 3 messages. Wait for a response before sending more.
             </div>
           ) : (
             <>
@@ -2507,9 +2685,11 @@ export default function ConversationPage() {
             </div>
           ) : null}
 
-          <form onSubmit={handleSubmit} className="flex items-end gap-2">
+          <form onSubmit={handleSubmit} className="flex min-w-0 items-end gap-2">
             {!isVoiceRecording ? (
               <>
+                {!isPendingRequester ? (
+                  <>
                 <input
                   ref={imageInputRef}
                   type="file"
@@ -2529,6 +2709,8 @@ export default function ConversationPage() {
                 >
                   <ImageIcon className="size-4" strokeWidth={2} />
                 </Button>
+                  </>
+                ) : null}
                 <textarea
                   ref={messageInputRef}
                   value={inputValue}
@@ -2548,7 +2730,7 @@ export default function ConversationPage() {
                 />
               </>
             ) : null}
-            {showMicInsteadOfSend || isVoiceRecording ? (
+            {!isPendingRequester && (showMicInsteadOfSendFinal || isVoiceRecording) ? (
               <div className={cn(isVoiceRecording && "flex-1")}>
                 <VoiceRecorder
                   disabled={isLoading || Boolean(loadError) || isSending}
@@ -2563,7 +2745,7 @@ export default function ConversationPage() {
               <Button
                 type="submit"
                 size="icon"
-                disabled={!canSend || isLoading || Boolean(loadError)}
+                disabled={!canSendMessage || isLoading || Boolean(loadError)}
                 aria-label="Send message"
                 className="size-10 shrink-0 rounded-xl"
               >

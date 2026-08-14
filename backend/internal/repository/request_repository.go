@@ -199,6 +199,80 @@ func (r *ConversationRepository) ListIncomingRequests(
 	return requests, nil
 }
 
+func (r *ConversationRepository) ListOutgoingRequests(
+	ctx context.Context,
+	userID uuid.UUID,
+) ([]models.IncomingMessageRequest, error) {
+	const query = `
+		SELECT
+			c.id,
+			u.id,
+			u.full_name,
+			u.username,
+			u.avatar_url,
+			COALESCE(latest.content, ''),
+			COALESCE(latest.is_unsent, false),
+			COALESCE(latest.created_at, c.created_at),
+			c.created_at
+		FROM conversations c
+		JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = $1
+		JOIN conversation_members cm_other
+			ON cm_other.conversation_id = c.id
+			AND cm_other.user_id <> $1
+		JOIN users u ON u.id = cm_other.user_id
+		LEFT JOIN LATERAL (
+			SELECT m.content, m.is_unsent, m.created_at
+			FROM messages m
+			WHERE m.conversation_id = c.id
+			ORDER BY m.created_at DESC
+			LIMIT 1
+		) latest ON true
+		WHERE c.type = $3
+		  AND c.status = $2
+		  AND c.requested_by = $1
+		  AND u.is_deleted = FALSE
+		ORDER BY COALESCE(latest.created_at, c.created_at) DESC`
+
+	rows, err := r.db.Query(
+		ctx,
+		query,
+		userID.String(),
+		models.ConversationStatusPending,
+		models.ConversationTypeDirect,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	requests := make([]models.IncomingMessageRequest, 0)
+	for rows.Next() {
+		var request models.IncomingMessageRequest
+
+		if err := rows.Scan(
+			&request.ConversationID,
+			&request.RequesterID,
+			&request.RequesterFullName,
+			&request.RequesterUsername,
+			&request.RequesterAvatarURL,
+			&request.LatestMessageContent,
+			&request.LatestMessageIsUnsent,
+			&request.LatestMessageAt,
+			&request.RequestedAt,
+		); err != nil {
+			return nil, err
+		}
+
+		requests = append(requests, request)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return requests, nil
+}
+
 func (r *ConversationRepository) UpdateStatus(
 	ctx context.Context,
 	conversationID uuid.UUID,

@@ -513,6 +513,10 @@ func (s *ConversationService) DeleteMessageForMe(
 		return ErrNotAuthorized
 	}
 
+	if err := s.ensureConversationNotPending(ctx, conversationID); err != nil {
+		return err
+	}
+
 	if err := s.conversations.HideMessageForUser(ctx, messageID, userID); err != nil {
 		return fmt.Errorf("conversation: failed to hide message: %w", err)
 	}
@@ -535,6 +539,15 @@ func (s *ConversationService) EditMessage(
 
 	if message.SenderID != userID.String() {
 		return nil, ErrNotAuthorized
+	}
+
+	conversationID, err := uuid.Parse(message.ConversationID)
+	if err != nil {
+		return nil, fmt.Errorf("conversation: invalid conversation id on message: %w", err)
+	}
+
+	if err := s.ensureConversationNotPending(ctx, conversationID); err != nil {
+		return nil, err
 	}
 
 	if message.Type == models.MessageTypeImage ||
@@ -593,6 +606,15 @@ func (s *ConversationService) UnsendMessage(
 
 	if message.SenderID != userID.String() {
 		return ErrNotAuthorized
+	}
+
+	conversationID, err := uuid.Parse(message.ConversationID)
+	if err != nil {
+		return fmt.Errorf("conversation: invalid conversation id on message: %w", err)
+	}
+
+	if err := s.ensureConversationNotPending(ctx, conversationID); err != nil {
+		return err
 	}
 
 	if message.IsUnsent {

@@ -745,7 +745,9 @@ func (r *ConversationRepository) GetConversationHeaderInfo(
 	}
 
 	info := &models.ConversationHeaderInfo{
-		Type: conversation.Type,
+		Type:        conversation.Type,
+		Status:      conversation.Status,
+		RequestedBy: conversation.RequestedBy,
 	}
 
 	switch conversation.Type {

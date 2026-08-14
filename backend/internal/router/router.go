@@ -76,6 +76,7 @@ func New(
 			protected.Get("/users/{username}", authHandler.GetPublicProfile)
 			protected.Post("/messages/request", conversationHandler.SendMessageRequest)
 			protected.Get("/messages/requests", conversationHandler.GetIncomingRequests)
+			protected.Get("/messages/requests/sent", conversationHandler.GetSentRequests)
 			protected.Post("/messages/requests/{conversationId}/accept", conversationHandler.AcceptRequest)
 			protected.Post("/messages/requests/{conversationId}/reject", conversationHandler.RejectRequest)
 			protected.Post("/messages/requests/{conversationId}/block", conversationHandler.BlockRequest)

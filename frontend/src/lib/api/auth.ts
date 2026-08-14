@@ -152,6 +152,10 @@ export function getIncomingRequests(): Promise<IncomingMessageRequest[]> {
   return api.get<IncomingMessageRequest[]>("/messages/requests");
 }
 
+export function getSentRequests(): Promise<ChatConversation[]> {
+  return api.get<ChatConversation[]>("/messages/requests/sent");
+}
+
 export function acceptRequest(conversationId: string): Promise<{ message: string }> {
   return api.post<{ message: string }>(
     `/messages/requests/${conversationId}/accept`

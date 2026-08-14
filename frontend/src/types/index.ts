@@ -81,6 +81,8 @@ export interface ChatConversation {
 
 export interface ConversationHeaderInfo {
   type: "direct" | "group";
+  status?: "pending" | "accepted" | "blocked";
+  requestedBy?: string;
   participantId?: string;
   participantFullName?: string;
   participantUsername?: string;
@@ -237,6 +239,17 @@ export interface PresenceEventPayload {
   userId: string;
   isOnline: boolean;
   lastSeen?: string;
+}
+
+export interface RequestReceivedEventPayload {
+  conversationId: string;
+  requesterId: string;
+  requesterFullName: string;
+  requesterUsername: string;
+  requesterAvatarUrl?: string | null;
+  latestMessageContent: string;
+  latestMessageAt: string;
+  requestedAt: string;
 }
 
 export type PrivacyVisibility =

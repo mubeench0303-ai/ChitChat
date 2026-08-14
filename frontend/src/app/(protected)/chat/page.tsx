@@ -11,6 +11,10 @@ import {
 } from "@/components/auth/signup-submit-button";
 import { CreateGroupDialog } from "@/components/chat/create-group-dialog";
 import {
+  ConversationPreviewRow,
+  ConversationPreviewRowSkeleton,
+} from "@/components/chat/conversation-preview-row";
+import {
   Avatar,
   AvatarFallback,
   AvatarImage,
@@ -37,6 +41,7 @@ import {
   blockConnection,
   clearChat,
   getChatList,
+  getSentRequests,
   pinConversation,
   removeConnection,
   unpinConversation,
@@ -50,7 +55,7 @@ import type { ChatConversation, NewMessageEventPayload, PresenceEventPayload } f
 import { cn } from "@/lib/utils";
 
 type ConfirmAction = "remove" | "block" | "clear";
-type ChatFilter = "all" | "unread" | "groups" | "direct";
+type ChatFilter = "all" | "unread" | "groups" | "direct" | "pending";
 
 const DEBOUNCE_MS = 400;
 const PIN_LIMIT_MESSAGE =
@@ -77,6 +82,7 @@ const FILTER_OPTIONS: Array<{ id: ChatFilter; label: string }> = [
   { id: "unread", label: "Unread" },
   { id: "groups", label: "Groups" },
   { id: "direct", label: "Direct" },
+  { id: "pending", label: "Pending" },
 ];
 
 function getConversationDisplayName(conversation: ChatConversation) {
@@ -232,10 +238,10 @@ function ChatListHeader({
   onNewGroup: () => void;
 }) {
   return (
-    <header className="mb-6 space-y-4">
+    <header className="mb-4 space-y-3 sm:mb-6 sm:space-y-4">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
-          <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[1.2px]">
+          <span className="hidden items-center gap-1.5 text-[10px] font-bold uppercase tracking-[1.2px] sm:flex">
             <i
               className={cn(
                 "block h-0.5 w-[18px] rounded-full",
@@ -244,10 +250,10 @@ function ChatListHeader({
             />
             <span className={signupGradientTextClass}>Messages</span>
           </span>
-          <h1 className="mt-2.5 text-[clamp(1.75rem,5vw,2.25rem)] font-semibold leading-tight tracking-[-0.04em] text-text-primary">
+          <h1 className="text-xl font-semibold leading-tight tracking-[-0.04em] text-text-primary sm:mt-2.5 sm:text-[clamp(1.75rem,5vw,2.25rem)]">
             Chats
           </h1>
-          <p className="mt-1.5 text-[13px] leading-relaxed text-text-secondary">
+          <p className="mt-1 hidden text-[13px] leading-relaxed text-text-secondary sm:block">
             Your conversations in one place
           </p>
         </div>
@@ -504,6 +510,11 @@ export default function ChatPage() {
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
   const [activeFilter, setActiveFilter] = useState<ChatFilter>("all");
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
+  const [sentRequests, setSentRequests] = useState<ChatConversation[]>([]);
+  const [isSentRequestsLoading, setIsSentRequestsLoading] = useState(false);
+  const [sentRequestsError, setSentRequestsError] = useState<string | null>(null);
+
+  const isPendingFilter = activeFilter === "pending";
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -533,8 +544,23 @@ export default function ChatPage() {
     });
   }, [activeFilter, conversations, debouncedSearchQuery]);
 
+  const filteredSentRequests = useMemo(() => {
+    const normalizedSearch = debouncedSearchQuery.trim().toLowerCase();
+
+    return sentRequests.filter((conversation) => {
+      if (!normalizedSearch) {
+        return true;
+      }
+
+      return getConversationSearchText(conversation)
+        .toLowerCase()
+        .includes(normalizedSearch);
+    });
+  }, [debouncedSearchQuery, sentRequests]);
+
   const hasActiveFilters =
-    activeFilter !== "all" || debouncedSearchQuery.trim().length > 0;
+    (activeFilter !== "all" && activeFilter !== "pending") ||
+    debouncedSearchQuery.trim().length > 0;
   useEffect(() => {
     let cancelled = false;
 
@@ -570,6 +596,51 @@ export default function ChatPage() {
       cancelled = true;
     };
   }, [setStoreConversations]);
+
+  useEffect(() => {
+    if (!isPendingFilter) {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadSentRequests() {
+      setIsSentRequestsLoading(true);
+      setSentRequestsError(null);
+
+      try {
+        const data = await getSentRequests();
+        if (!cancelled) {
+          setSentRequests(
+            [...data].sort(
+              (left, right) =>
+                new Date(right.latestMessageAt).getTime() -
+                new Date(left.latestMessageAt).getTime()
+            )
+          );
+        }
+      } catch (loadError) {
+        if (!cancelled) {
+          setSentRequests([]);
+          setSentRequestsError(
+            loadError instanceof Error
+              ? loadError.message
+              : "Something went wrong"
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setIsSentRequestsLoading(false);
+        }
+      }
+    }
+
+    void loadSentRequests();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isPendingFilter]);
 
   useEffect(() => {
     const unsubscribe = subscribe("new_message", (payload) => {
@@ -772,7 +843,7 @@ export default function ChatPage() {
 
   return (
     <div className="h-full overflow-y-auto bg-background">
-      <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col px-4 py-5 sm:px-6 sm:py-8">
+      <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col px-4 py-4 sm:px-6 sm:py-8">
         <ChatListHeader
           searchQuery={searchQuery}
           activeFilter={activeFilter}
@@ -782,6 +853,73 @@ export default function ChatPage() {
         />
 
         <div className="flex-1 space-y-2.5">
+          {isPendingFilter ? (
+            <>
+              {sentRequestsError ? (
+                <p className="rounded-[13px] border border-border/70 bg-surface-1/50 px-3.5 py-3 text-[13px] leading-relaxed text-accent">
+                  {sentRequestsError}
+                </p>
+              ) : null}
+
+              {isSentRequestsLoading ? (
+                <>
+                  <ConversationPreviewRowSkeleton />
+                  <ConversationPreviewRowSkeleton />
+                  <ConversationPreviewRowSkeleton />
+                </>
+              ) : null}
+
+              {!isSentRequestsLoading && filteredSentRequests.length > 0
+                ? filteredSentRequests.map((conversation) => (
+                    <ConversationPreviewRow
+                      key={conversation.conversationId}
+                      conversation={{
+                        conversationId: conversation.conversationId,
+                        displayName: getConversationDisplayName(conversation),
+                        avatarUrl: conversation.requesterAvatarUrl,
+                        latestMessageContent: conversation.latestMessageContent,
+                        latestMessageAt: conversation.latestMessageAt,
+                        isOnline: conversation.requesterIsOnline,
+                      }}
+                      onOpen={() =>
+                        router.push(
+                          `/chat/${encodeURIComponent(conversation.conversationId)}`
+                        )
+                      }
+                    />
+                  ))
+                : null}
+
+              {!isSentRequestsLoading &&
+              !sentRequestsError &&
+              sentRequests.length === 0 ? (
+                <div className="rounded-[13px] border border-dashed border-border/70 bg-surface-1/30 px-3.5 py-12 text-center">
+                  <p className="text-sm font-medium text-text-secondary">
+                    No pending requests sent
+                  </p>
+                  <p className="mt-1 text-[13px] text-text-muted">
+                    Message requests you send will appear here until accepted.
+                  </p>
+                </div>
+              ) : null}
+
+              {!isSentRequestsLoading &&
+              !sentRequestsError &&
+              sentRequests.length > 0 &&
+              filteredSentRequests.length === 0 &&
+              debouncedSearchQuery.trim().length > 0 ? (
+                <div className="rounded-[13px] border border-dashed border-border/70 bg-surface-1/30 px-3.5 py-12 text-center">
+                  <p className="text-sm font-medium text-text-secondary">
+                    No pending requests match
+                  </p>
+                  <p className="mt-1 text-[13px] text-text-muted">
+                    Try a different search term.
+                  </p>
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <>
           {error ? (
             <p className="rounded-[13px] border border-border/70 bg-surface-1/50 px-3.5 py-3 text-[13px] leading-relaxed text-accent">
               {error}
@@ -860,6 +998,8 @@ export default function ChatPage() {
               </p>
             </div>
           ) : null}
+            </>
+          )}
         </div>
       </div>
 

@@ -88,6 +88,9 @@ type BlockedUser struct {
 type ConversationHeaderInfo struct {
 	Type string `json:"type"`
 
+	Status      *string `json:"status,omitempty"`
+	RequestedBy *string `json:"requestedBy,omitempty"`
+
 	ParticipantID        *string    `json:"participantId,omitempty"`
 	ParticipantFullName  *string    `json:"participantFullName,omitempty"`
 	ParticipantUsername  *string    `json:"participantUsername,omitempty"`

@@ -218,11 +218,13 @@
 
   html {
     height: 100%;
+    overflow-x: clip;
     @apply font-sans;
   }
 
   body {
     min-height: 100dvh;
+    overflow-x: clip;
     background-color: var(--background);
     color: var(--text-primary);
     font-family: var(--font-sans);
@@ -255,7 +257,7 @@
 @layer components {
   [data-sonner-toaster][data-sonner-theme="light"],
   [data-sonner-toaster][data-sonner-theme="dark"] {
-    --width: 22rem;
+    --width: min(22rem, calc(100vw - 2rem));
     font-family: var(--font-sans);
   }
 

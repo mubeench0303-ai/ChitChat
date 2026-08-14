@@ -32,6 +32,7 @@ var (
 	ErrNotAuthorized                  = errors.New("not authorized")
 	ErrNotBlockInitiator              = errors.New("not authorized to unblock this user")
 	ErrConversationNotAccepted        = errors.New("conversation is not accepted")
+	ErrPendingMessageModification     = errors.New("Messages can't be modified until the request is accepted")
 	ErrMessageNotFound                = errors.New("message not found")
 	ErrNotMessageSender               = errors.New("not your message")
 	ErrEditWindowExpired              = errors.New("edit window expired")

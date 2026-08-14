@@ -8,7 +8,7 @@ import { ArrowLeft, Calendar, Clock, Eye, ImagePlus, Loader2, Mail, Pencil, Sear
 import { toast } from "sonner";
 
 import { AuthCard } from "@/components/auth/auth-card";
-import { AuthShell } from "@/components/auth/auth-shell";
+import { ProtectedPageFrame } from "@/components/layout/protected-page-frame";
 import {
   SignupSubmitButton,
   signupGradientBgClass,
@@ -133,7 +133,9 @@ function ProfileRow({
         <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-text-muted">
           {label}
         </p>
-        <div className="mt-1 text-sm text-text-primary">{children}</div>
+        <div className="mt-1 break-words text-sm text-text-primary [overflow-wrap:anywhere]">
+          {children}
+        </div>
       </div>
     </div>
   );
@@ -141,8 +143,7 @@ function ProfileRow({
 
 function ProfileSkeleton() {
   return (
-    <div className="h-full overflow-y-auto">
-      <AuthShell className="min-h-full">
+    <ProtectedPageFrame>
       <AuthCard>
         <div className="mt-7 space-y-4">
           <Skeleton className="mx-auto size-32 rounded-full" />
@@ -154,8 +155,7 @@ function ProfileSkeleton() {
           <Skeleton className="h-[51px] w-full rounded-[14px]" />
         </div>
       </AuthCard>
-      </AuthShell>
-    </div>
+    </ProtectedPageFrame>
   );
 }
 
@@ -375,8 +375,7 @@ export default function ProfilePage() {
   const canRemovePhoto = Boolean(user.avatarUrl);
 
   return (
-    <div className="h-full overflow-y-auto">
-      <AuthShell className="min-h-full">
+    <ProtectedPageFrame>
       <AuthCard aria-labelledby="profile-title">
         <div className="flex items-center justify-between gap-3">
           <Link
@@ -460,7 +459,7 @@ export default function ProfilePage() {
             {isAvatarMenuOpen ? (
               <div
                 role="menu"
-                className="absolute right-0 top-[calc(100%+8px)] z-40 w-52 overflow-hidden rounded-[13px] border border-border/70 bg-background text-left shadow-[0_16px_40px_color-mix(in_srgb,var(--text-primary)_12%,transparent)]"
+                className="absolute left-1/2 top-[calc(100%+8px)] z-40 w-52 -translate-x-1/2 overflow-hidden rounded-[13px] border border-border/70 bg-background text-left shadow-[0_16px_40px_color-mix(in_srgb,var(--text-primary)_12%,transparent)] sm:left-auto sm:right-0 sm:translate-x-0"
               >
                 <AvatarMenuItem
                   icon={<Eye className="size-4" strokeWidth={2} />}
@@ -510,7 +509,7 @@ export default function ProfilePage() {
               <img
                 src={displayedAvatarUrl}
                 alt={user.fullName}
-                className="max-h-[85vh] max-w-full rounded-2xl object-contain shadow-2xl"
+                className="max-h-[85dvh] max-w-full rounded-2xl object-contain shadow-2xl"
                 onClick={(event) => event.stopPropagation()}
               />
             </div>
@@ -713,7 +712,6 @@ export default function ProfilePage() {
           </Link>
         </motion.div>
       </AuthCard>
-      </AuthShell>
-    </div>
+    </ProtectedPageFrame>
   );
 }

@@ -164,7 +164,7 @@ function VerifyPageContent() {
           {email ? (
             <>
               We sent a 6-digit code to{" "}
-              <span className="font-medium text-text-primary">{email}</span>.
+              <span className="break-all font-medium text-text-primary">{email}</span>.
             </>
           ) : (
             "Enter the 6-digit code we sent to your email."

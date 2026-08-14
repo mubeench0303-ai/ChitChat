@@ -96,6 +96,32 @@ func (h *ConversationHandler) GetIncomingRequests(w http.ResponseWriter, r *http
 	writeJSON(w, http.StatusOK, requests)
 }
 
+func (h *ConversationHandler) GetSentRequests(w http.ResponseWriter, r *http.Request) {
+	userIDStr, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	requests, err := h.conversations.GetSentRequests(r.Context(), userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to fetch sent requests")
+		return
+	}
+
+	if requests == nil {
+		requests = []models.ConversationWithPreview{}
+	}
+
+	writeJSON(w, http.StatusOK, requests)
+}
+
 func (h *ConversationHandler) AcceptRequest(w http.ResponseWriter, r *http.Request) {
 	h.respondToRequest(w, r, h.conversations.AcceptRequest)
 }

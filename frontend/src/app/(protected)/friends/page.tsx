@@ -138,7 +138,7 @@ export default function FriendsPage() {
           <h1 className="text-xl font-semibold tracking-[-0.02em] text-text-primary">
             Friends
           </h1>
-          <p className="mt-1 text-[13px] text-text-secondary">
+          <p className="mt-1 hidden text-[13px] text-text-secondary sm:block">
             People you&apos;re connected with
           </p>
         </header>

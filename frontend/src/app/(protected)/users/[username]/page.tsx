@@ -11,7 +11,7 @@ import { ArrowLeft, UserX } from "lucide-react";
 import { toast } from "sonner";
 
 import { AuthCard } from "@/components/auth/auth-card";
-import { AuthShell } from "@/components/auth/auth-shell";
+import { ProtectedPageFrame } from "@/components/layout/protected-page-frame";
 import {
   SignupSubmitButton,
   signupGradientBgClass,
@@ -75,12 +75,20 @@ function ProfileBackLink() {
   const searchParams = useSearchParams();
   const from = searchParams.get("from");
   const groupId = searchParams.get("groupId");
+  const conversationId = searchParams.get("conversationId");
 
   const isFromGroup = from === "group" && groupId;
+  const isFromChat = from === "chat" && conversationId;
   const href = isFromGroup
     ? `/groups/${encodeURIComponent(groupId)}`
-    : "/search";
-  const label = isFromGroup ? "Back to Group Info" : "Back to Search";
+    : isFromChat
+      ? `/chat/${encodeURIComponent(conversationId)}`
+      : "/search";
+  const label = isFromGroup
+    ? "Back to Group Info"
+    : isFromChat
+      ? "Back to chat"
+      : "Back to Search";
 
   return (
     <Link href={href} className={profileBackLinkClassName}>
@@ -114,8 +122,7 @@ function mapMessageRequestError(message: string) {
 
 function PublicProfileSkeleton() {
   return (
-    <div className="h-full overflow-y-auto">
-      <AuthShell className="min-h-full">
+    <ProtectedPageFrame>
       <AuthCard>
         <Skeleton className="h-4 w-24" />
         <div className="mt-6 space-y-4 text-center">
@@ -126,8 +133,7 @@ function PublicProfileSkeleton() {
           <Skeleton className="mx-auto h-10 w-full max-w-sm rounded-lg" />
         </div>
       </AuthCard>
-      </AuthShell>
-    </div>
+    </ProtectedPageFrame>
   );
 }
 
@@ -135,8 +141,7 @@ function PublicProfileUserGone() {
   const reduceMotion = useReducedMotion();
 
   return (
-    <div className="h-full overflow-y-auto">
-      <AuthShell className="min-h-full">
+    <ProtectedPageFrame>
         <AuthCard aria-labelledby="public-profile-gone-title">
           <ProfileBackLink />
           <motion.div
@@ -159,8 +164,7 @@ function PublicProfileUserGone() {
             </p>
           </motion.div>
         </AuthCard>
-      </AuthShell>
-    </div>
+    </ProtectedPageFrame>
   );
 }
 
@@ -168,8 +172,7 @@ function PublicProfileNotFound({ username }: { username: string }) {
   const reduceMotion = useReducedMotion();
 
   return (
-    <div className="h-full overflow-y-auto">
-      <AuthShell className="min-h-full">
+    <ProtectedPageFrame>
       <AuthCard aria-labelledby="public-profile-not-found-title">
         <ProfileBackLink />
         <motion.div
@@ -193,8 +196,7 @@ function PublicProfileNotFound({ username }: { username: string }) {
           </p>
         </motion.div>
       </AuthCard>
-      </AuthShell>
-    </div>
+    </ProtectedPageFrame>
   );
 }
 
@@ -246,8 +248,7 @@ function PublicProfileContent({ profile }: { profile: PublicProfile }) {
   }
 
   return (
-    <div className="h-full overflow-y-auto">
-      <AuthShell className="min-h-full">
+    <ProtectedPageFrame>
       <AuthCard aria-labelledby="public-profile-title">
         <ProfileBackLink />
         <motion.div
@@ -383,8 +384,7 @@ function PublicProfileContent({ profile }: { profile: PublicProfile }) {
         </Dialog>
         ) : null}
       </AuthCard>
-    </AuthShell>
-    </div>
+    </ProtectedPageFrame>
   );
 }
 
@@ -468,13 +468,12 @@ export default function PublicProfilePage() {
 
   if (error) {
     return (
-      <div className="h-full overflow-y-auto">
-        <AuthShell className="min-h-full">
+      <ProtectedPageFrame>
         <AuthCard>
-          <ProfileBackLink />          <p className="mt-6 text-[13px] leading-relaxed text-accent">{error}</p>
+          <ProfileBackLink />
+          <p className="mt-6 text-[13px] leading-relaxed text-accent">{error}</p>
         </AuthCard>
-        </AuthShell>
-      </div>
+      </ProtectedPageFrame>
     );
   }
 

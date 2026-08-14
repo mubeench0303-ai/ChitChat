@@ -300,7 +300,7 @@ function BlockedUserRow({
   onUnblock: (conversationId: string) => void;
 }) {
   return (
-    <div className="flex items-center gap-3 rounded-[13px] border border-border/60 bg-surface-1/40 px-3 py-3">
+    <div className="flex flex-col items-stretch gap-3 rounded-[13px] border border-border/60 bg-surface-1/40 px-3 py-3 sm:flex-row sm:items-center">
       <Avatar className="size-11 shrink-0">
         {user.avatarUrl ? (
           <AvatarImage src={user.avatarUrl} alt={user.fullName} />
@@ -328,7 +328,7 @@ function BlockedUserRow({
         size="sm"
         disabled={isUnblocking}
         onClick={() => onUnblock(user.conversationId)}
-        className="shrink-0"
+        className="w-full shrink-0 sm:w-auto"
       >
         {isUnblocking ? (
           <>
@@ -905,10 +905,10 @@ export default function SettingsPage() {
               />
               <span className={signupGradientTextClass}>Account</span>
             </span>
-            <h1 className="mt-2.5 text-[clamp(1.5rem,4vw,2rem)] font-semibold leading-tight tracking-[-0.04em] text-text-primary">
+          <h1 className="mt-2.5 text-xl font-semibold leading-tight tracking-[-0.04em] text-text-primary lg:text-[clamp(1.5rem,4vw,2rem)]">
               Settings
             </h1>
-            <p className="mt-1.5 text-[13px] leading-relaxed text-text-secondary">
+            <p className="mt-1.5 hidden text-[13px] leading-relaxed text-text-secondary sm:block">
               Manage your account preferences and security.
             </p>
           </div>

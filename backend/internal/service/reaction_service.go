@@ -50,6 +50,10 @@ func (s *ConversationService) ToggleReaction(
 		return ErrNotAuthorized
 	}
 
+	if err := s.ensureConversationNotPending(ctx, conversationID); err != nil {
+		return err
+	}
+
 	currentReaction, err := s.conversations.GetUserReaction(ctx, messageID, userID)
 	if err != nil {
 		return fmt.Errorf("conversation: failed to get user reaction: %w", err)

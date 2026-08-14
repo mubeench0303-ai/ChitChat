@@ -185,7 +185,7 @@ function LoginPageContent() {
             name="password"
             render={({ field }) => (
               <FormItem className="mb-5">
-                <div className="mb-[7px] ml-0.5 flex items-center justify-between gap-2">
+                <div className="mb-[7px] ml-0.5 flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
                   <FormLabel className="text-[13px] font-bold text-text-secondary">
                     Password
                   </FormLabel>

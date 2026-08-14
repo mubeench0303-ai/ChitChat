@@ -40,7 +40,7 @@ export function StatusViewersSheet({
     <div className="absolute inset-x-0 bottom-0 z-30">
       <button
         type="button"
-        className="absolute inset-0 -top-[100vh] bg-black/40"
+        className="absolute inset-0 -top-[100dvh] bg-black/40"
         aria-label="Close viewers list"
         onClick={onClose}
       />

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/google/uuid"
@@ -50,11 +51,13 @@ func (s *ConversationService) SendMessageRequest(
 		return nil, fmt.Errorf("conversation: failed to find conversation: %w", err)
 	}
 
+	isNewRequest := false
 	if conversation == nil {
 		conversation, err = s.conversations.Create(ctx, senderID, targetID, senderID)
 		if err != nil {
 			return nil, fmt.Errorf("conversation: failed to create conversation: %w", err)
 		}
+		isNewRequest = true
 	}
 
 	switch conversationStatus(conversation) {
@@ -91,6 +94,31 @@ func (s *ConversationService) SendMessageRequest(
 		return nil, fmt.Errorf("conversation: failed to create message: %w", err)
 	}
 
+	if isNewRequest && s.notifications != nil {
+		sender, senderErr := s.users.GetUserByID(ctx, senderID.String())
+		if senderErr != nil {
+			log.Printf("conversation: failed to load sender for request notification: %v", senderErr)
+		} else {
+			payload := map[string]interface{}{
+				"conversationId":       conversation.ID,
+				"requesterId":          sender.ID,
+				"requesterFullName":    sender.FullName,
+				"requesterUsername":    sender.Username,
+				"requesterAvatarUrl":   sender.AvatarURL,
+				"latestMessageContent": message.Content,
+				"latestMessageAt":      message.CreatedAt,
+				"requestedAt":          conversation.CreatedAt,
+			}
+			if notifyErr := s.notifications.NotifyUsers(
+				[]uuid.UUID{targetID},
+				"request_received",
+				payload,
+			); notifyErr != nil {
+				log.Printf("conversation: failed to notify request recipient: %v", notifyErr)
+			}
+		}
+	}
+
 	return message, nil
 }
 
@@ -121,6 +149,63 @@ func (s *ConversationService) GetIncomingRequests(
 			LatestMessageAt:      request.LatestMessageAt,
 			RequestedAt:          request.RequestedAt,
 		})
+	}
+
+	return results, nil
+}
+
+func (s *ConversationService) GetSentRequests(
+	ctx context.Context,
+	userID uuid.UUID,
+) ([]models.ConversationWithPreview, error) {
+	requests, err := s.conversations.ListOutgoingRequests(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("conversation: failed to list sent requests: %w", err)
+	}
+
+	results := make([]models.ConversationWithPreview, 0, len(requests))
+	for _, request := range requests {
+		latestContent := request.LatestMessageContent
+		if request.LatestMessageIsUnsent {
+			latestContent = unsentMessagePlaceholder
+		}
+
+		results = append(results, models.ConversationWithPreview{
+			ConversationID:       request.ConversationID,
+			Type:                 models.ConversationTypeDirect,
+			RequesterID:          request.RequesterID,
+			RequesterFullName:    request.RequesterFullName,
+			RequesterUsername:    request.RequesterUsername,
+			RequesterAvatarURL:   request.RequesterAvatarURL,
+			LatestMessageContent: latestContent,
+			LatestMessageAt:      request.LatestMessageAt,
+			RequestedAt:          request.RequestedAt,
+		})
+	}
+
+	for i := range results {
+		targetID, parseErr := uuid.Parse(results[i].RequesterID)
+		if parseErr != nil {
+			continue
+		}
+
+		avatarURL := results[i].RequesterAvatarURL
+		isOnline := results[i].RequesterIsOnline
+		lastSeen := results[i].RequesterLastSeen
+		if privacyErr := s.applyDirectParticipantPrivacy(
+			ctx,
+			userID,
+			targetID,
+			&avatarURL,
+			&isOnline,
+			&lastSeen,
+		); privacyErr != nil {
+			return nil, privacyErr
+		}
+
+		results[i].RequesterAvatarURL = avatarURL
+		results[i].RequesterIsOnline = isOnline
+		results[i].RequesterLastSeen = lastSeen
 	}
 
 	return results, nil
@@ -218,6 +303,25 @@ func conversationRequestedBy(conversation *models.Conversation) string {
 	}
 
 	return *conversation.RequestedBy
+}
+
+func (s *ConversationService) ensureConversationNotPending(
+	ctx context.Context,
+	conversationID uuid.UUID,
+) error {
+	conversation, err := s.conversations.GetByID(ctx, conversationID)
+	if errors.Is(err, repository.ErrNotFound) {
+		return ErrConversationNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("conversation: failed to fetch conversation: %w", err)
+	}
+
+	if conversationStatus(conversation) == models.ConversationStatusPending {
+		return ErrPendingMessageModification
+	}
+
+	return nil
 }
 
 func canRespondToIncomingRequest(
