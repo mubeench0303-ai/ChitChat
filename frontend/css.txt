@@ -1,0 +1,263 @@
+CHAT APP — UI / CSS DESIGN INSTRUCTIONS
+
+DESIGN DIRECTION
+- Modern, minimal, premium messaging application.
+- Inspired by Resend's minimal surfaces, Vercel's layout precision,
+  Intercom's conversational UX, and Sanity's restrained red accent.
+- Do NOT make it look like a generic AI-generated website.
+- No purple, violet, indigo, blue gradients.
+- No glassmorphism.
+- No excessive gradients.
+- No huge rounded cards everywhere.
+- Keep UI dense enough for a chat/productivity application.
+- Desktop-first but fully responsive.
+
+TYPOGRAPHY
+Primary Font:
+- Geist Sans
+
+Secondary / metadata:
+- Geist Mono only where useful for timestamps, codes, technical/meta text.
+
+Weights:
+- Regular: 400
+- Medium: 500
+- Semibold: 600
+
+Suggested sizes:
+- Page title: 24–28px / 600
+- Section title: 18–20px / 600
+- Body: 14px / 400
+- Buttons: 14px / 500
+- Chat preview: 13–14px
+- Timestamp/meta: 11–12px
+
+Do not use oversized marketing-site typography.
+
+DARK THEME
+
+--background: #0A0A0A;
+--surface-1: #111111;
+--surface-2: #1C1C1C;
+--surface-hover: #222222;
+
+--border: #2A2A2A;
+--border-subtle: #202020;
+
+--text-primary: #EDEDED;
+--text-secondary: #8A8A8A;
+--text-muted: #666666;
+
+--accent: #FF404F;
+--accent-hover: #E93645;
+--accent-subtle: rgba(255, 64, 79, 0.10);
+
+--success: #22C55E;
+--danger: #EF4444;
+
+LIGHT THEME
+
+--background: #FAFAFA;
+--surface-1: #FFFFFF;
+--surface-2: #F3F3F3;
+--surface-hover: #EEEEEE;
+
+--border: #E5E5E5;
+--border-subtle: #EEEEEE;
+
+--text-primary: #111111;
+--text-secondary: #666666;
+--text-muted: #999999;
+
+--accent: #E6404D;
+--accent-hover: #CE3542;
+--accent-subtle: rgba(230, 64, 77, 0.08);
+
+BORDER RADIUS
+- Small controls: 4–6px
+- Inputs/buttons: 6–8px
+- Message bubbles: 8–10px
+- Panels/cards: 8–10px
+- Avatars: circular
+
+Avoid excessive 16px/20px/24px rounding.
+
+BORDERS & SHADOWS
+- Prefer subtle 1px borders over heavy shadows.
+- Dark mode should primarily use borders to separate surfaces.
+- Shadows should be very subtle.
+- Avoid floating/glowing cards.
+
+Example:
+border: 1px solid var(--border);
+
+LAYOUT
+
+Desktop:
+- Left navigation sidebar
+- Conversation list
+- Active conversation
+- Optional user/info panel
+
+Navigation: ~170–200px
+Conversation list: ~280–340px
+Info panel: ~260–300px
+Chat area takes remaining width.
+
+Use full viewport:
+height: 100dvh;
+
+Avoid placing the entire app inside a centered rounded container.
+The application should feel like a real desktop messaging product.
+
+SIDEBAR
+- Dark/neutral surface.
+- Thin right border.
+- Compact navigation rows.
+- Icons + labels.
+- Active item gets subtle accent background/left indicator.
+- Red accent should be used sparingly.
+- Unread counts can use red badges.
+
+CHAT LIST
+- Search input at top.
+- Compact conversation rows.
+- Avatar + name + latest message + timestamp.
+- Unread badge.
+- Online indicator.
+- Selected conversation uses subtle surface highlight.
+- Do not put every conversation inside a separate card.
+
+CHAT AREA
+- Header separated with thin bottom border.
+- User avatar/name/status on left.
+- Actions on right.
+- Messages should have generous vertical breathing room without wasting space.
+
+Received message:
+- Neutral dark/light surface.
+
+Sent message:
+- Accent red/coral surface.
+- Keep red slightly restrained; avoid neon appearance.
+
+Message bubble max width:
+- approximately 60–70% desktop
+- approximately 80–85% mobile
+
+Show timestamp and WhatsApp-style delivery ticks subtly.
+
+MESSAGE INPUT
+- Fixed/sticky at bottom of conversation.
+- Compact input area.
+- Attachment button on left.
+- Emoji/action controls.
+- Accent send button.
+- Avoid giant pill-shaped input.
+
+BUTTONS
+Primary:
+- Accent background.
+- High contrast text.
+- 6–8px radius.
+
+Secondary:
+- Neutral surface or transparent.
+- 1px border.
+
+Destructive:
+- Red text/background only where necessary.
+
+Do not make every action a primary red button.
+
+INPUTS
+- Neutral surface.
+- 1px border.
+- Subtle focus ring using accent.
+- No glowing/neon focus effect.
+
+Focus example:
+border-color: var(--accent);
+box-shadow: 0 0 0 2px var(--accent-subtle);
+
+AVATARS
+- Circular.
+- Sizes should be consistent:
+  28–32px small
+  36–40px conversation list
+  40px chat header
+  72–88px profile panel
+
+Online indicator:
+- Small green dot.
+- Thin border matching surrounding surface.
+
+ICONS
+- Use one consistent icon library.
+- Lucide icons preferred.
+- Thin/medium stroke.
+- Default icons neutral.
+- Accent only for selected/important states.
+
+ANIMATIONS
+- Fast and subtle.
+- 120–200ms transitions.
+- Hover, active, message arrival, dropdown opening.
+- No excessive bouncing, scaling or flashy animations.
+
+Example:
+transition: background-color 150ms ease,
+            border-color 150ms ease,
+            opacity 150ms ease;
+
+RESPONSIVE
+
+Desktop:
+Navigation + Chats + Conversation + optional Info panel.
+
+Tablet:
+Navigation becomes compact.
+Info panel becomes drawer.
+
+Mobile:
+Only one primary screen visible at a time.
+
+Chats → Conversation → Back
+
+Use bottom navigation for:
+Chats
+Requests
+Status
+Groups
+Settings/Profile
+
+Mobile should feel intentionally designed,
+not like the desktop UI squeezed into a smaller screen.
+
+SPACING
+Use consistent spacing scale:
+
+4px
+8px
+12px
+16px
+20px
+24px
+32px
+
+Avoid random margins/paddings.
+
+IMPORTANT VISUAL RULES
+
+- Red/coral is an ACCENT, not the background of the whole application.
+- Main UI should remain neutral black/charcoal/off-white.
+- Avoid gradients unless extremely subtle and justified.
+- Avoid glassmorphism.
+- Avoid purple/blue AI SaaS aesthetics.
+- Avoid excessive rounded containers.
+- Avoid excessive shadows.
+- Avoid oversized headings.
+- Avoid landing-page styling inside the actual chat application.
+- Prioritize information hierarchy and conversation readability.
+- Dark and light themes must use the same visual language.
+- Every component should look intentional, compact and production-ready.
