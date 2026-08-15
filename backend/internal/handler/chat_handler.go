@@ -216,6 +216,10 @@ func (h *ConversationHandler) SendMessage(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if errors.Is(err, service.ErrAIDailyMessageLimitReached) {
+		writeErrorWithCode(w, http.StatusTooManyRequests, err.Error(), "daily_limit_reached")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to send message")
 		return
@@ -330,6 +334,10 @@ func (h *ConversationHandler) SendVoiceMessage(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if errors.Is(err, service.ErrAIDailyMessageLimitReached) {
+		writeErrorWithCode(w, http.StatusTooManyRequests, err.Error(), "daily_limit_reached")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to send voice message")
 		return
@@ -442,6 +450,10 @@ func (h *ConversationHandler) SendVideoMessage(w http.ResponseWriter, r *http.Re
 		errors.Is(err, service.ErrInvalidMessageVideoContentType) ||
 		errors.Is(err, service.ErrMessageVideoTooLong) {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if errors.Is(err, service.ErrAIDailyMessageLimitReached) {
+		writeErrorWithCode(w, http.StatusTooManyRequests, err.Error(), "daily_limit_reached")
 		return
 	}
 	if err != nil {

@@ -13,6 +13,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/google/uuid"
+
 	"github.com/mubeench0303-ai/ChitChat/backend/internal/models"
 	"github.com/mubeench0303-ai/ChitChat/backend/internal/repository"
 	"github.com/mubeench0303-ai/ChitChat/backend/pkg/cloudinary"
@@ -69,6 +71,7 @@ type AuthService struct {
 	mailer        *email.Client
 	cloudinary    *cloudinary.Client
 	jwt           *jwthelper.Helper
+	assistant     *AssistantService
 }
 
 func NewAuthService(
@@ -79,6 +82,7 @@ func NewAuthService(
 	mailer *email.Client,
 	cloudinaryClient *cloudinary.Client,
 	jwt *jwthelper.Helper,
+	assistant *AssistantService,
 ) *AuthService {
 	return &AuthService{
 		db:            db,
@@ -88,6 +92,7 @@ func NewAuthService(
 		mailer:        mailer,
 		cloudinary:    cloudinaryClient,
 		jwt:           jwt,
+		assistant:     assistant,
 	}
 }
 
@@ -163,6 +168,8 @@ func (s *AuthService) Signup(ctx context.Context, fullName, username, email, pas
 		return nil, fmt.Errorf("auth: failed to send verification email: %w", err)
 	}
 
+	s.ensureAIConversationBestEffort(user.ID)
+
 	return &SignupResult{
 		User:               user,
 		VerificationResent: false,
@@ -221,6 +228,10 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (*Login
 		return nil, ErrAccountNoLongerExists
 	}
 
+	if user.IsSystem {
+		return nil, ErrInvalidCredentials
+	}
+
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
 		return nil, ErrInvalidCredentials
 	}
@@ -234,10 +245,34 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (*Login
 		return nil, fmt.Errorf("auth: failed to generate token: %w", err)
 	}
 
+	s.ensureAIConversationBestEffort(user.ID)
+
 	return &LoginResult{
 		Token: token,
 		User:  user,
 	}, nil
+}
+
+func (s *AuthService) ensureAIConversationBestEffort(userID string) {
+	if s.assistant == nil {
+		return
+	}
+
+	userUUID, err := uuid.Parse(userID)
+	if err != nil {
+		log.Printf("auth: invalid user id for AI assistant conversation: %v", err)
+		return
+	}
+
+	go func() {
+		if err := s.assistant.EnsureAIConversation(context.Background(), userUUID); err != nil {
+			log.Printf(
+				"auth: failed to ensure AI assistant conversation for user %s: %v",
+				userID,
+				err,
+			)
+		}
+	}()
 }
 
 func (s *AuthService) ResendVerificationCode(ctx context.Context, email string) error {

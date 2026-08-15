@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Check, CheckCheck, ImageIcon, Info, Loader2, Mic, MoreVertical, Palette, Send, Smile, Users, Video, X } from "lucide-react";
+import { ArrowLeft, Check, CheckCheck, ImageIcon, Info, Loader2, Mic, MoreVertical, Palette, Send, Smile, Sparkles, Users, Video, X } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -38,7 +38,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { getConversationHeaderInfo, getGroupInfo, getMessageInfo, getMessages, sendMessage, sendVideoMessage, sendVoiceMessage, deleteMessageForMe, editMessage, unsendMessage, markConversationRead, toggleReaction, acceptRequest, rejectRequest, blockRequest } from "@/lib/api/auth";
 import { sendMessageRequest } from "@/lib/api/conversations";
-import { getApiErrorStatus } from "@/lib/api/errors";
+import { getApiErrorCode, getApiErrorStatus } from "@/lib/api/errors";
 import { getChatBackgroundStyle } from "@/lib/chat-backgrounds";
 import { chatMessageSchema } from "@/lib/validations/conversation";
 import {
@@ -1266,6 +1266,35 @@ function MessageBubble({
   );
 }
 
+const AI_TYPING_TIMEOUT_MS = 15_000;
+const AI_DAILY_MESSAGE_LIMIT = 15;
+const AI_DAILY_LIMIT_MESSAGE =
+  "You've reached today's limit of 15 messages to AI Assistant. Come back after midnight to continue.";
+
+function countTodaysMessagesByUser(
+  messages: ChatMessage[],
+  userId: string
+): number {
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+
+  return messages.filter((message) => {
+    if (message.senderId !== userId || message.isUnsent) {
+      return false;
+    }
+
+    if (message.id.startsWith("temp-")) {
+      return false;
+    }
+
+    return new Date(message.createdAt) >= startOfToday;
+  }).length;
+}
+
+function isDailyLimitReachedError(error: unknown): boolean {
+  return getApiErrorCode(error) === "daily_limit_reached";
+}
+
 export default function ConversationPage() {
   const params = useParams<{ conversationId: string }>();
   const searchParams = useSearchParams();
@@ -1286,6 +1315,7 @@ export default function ConversationPage() {
   const isTypingActiveRef = useRef(false);
   const stopTypingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typingHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const aiTypingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const messagesBeforeReactionRef = useRef<ChatMessage[]>([]);
 
   const [headerInfo, setHeaderInfo] = useState<ConversationHeaderInfo | null>(null);
@@ -1299,6 +1329,7 @@ export default function ConversationPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [isOtherTyping, setIsOtherTyping] = useState(false);
+  const [isAiTyping, setIsAiTyping] = useState(false);
   const [typingSenderName, setTypingSenderName] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ChatMessage | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -1331,6 +1362,7 @@ export default function ConversationPage() {
   const [pendingRequestError, setPendingRequestError] = useState<string | null>(
     null
   );
+  const [aiDailyLimitReached, setAiDailyLimitReached] = useState(false);
 
   const trimmedInput = inputValue.trim();
   const hasComposerContent = trimmedInput.length > 0;
@@ -1351,6 +1383,32 @@ export default function ConversationPage() {
   const isPendingRecipient =
     isPendingConversation && !isPendingRequester;
   const participantUsername = headerInfo?.participantUsername;
+  const participantIsSystem = headerInfo?.participantIsSystem === true;
+
+  function startAiTypingIndicator() {
+    if (!participantIsSystem) {
+      return;
+    }
+
+    setIsAiTyping(true);
+    if (aiTypingTimeoutRef.current) {
+      clearTimeout(aiTypingTimeoutRef.current);
+    }
+
+    aiTypingTimeoutRef.current = setTimeout(() => {
+      setIsAiTyping(false);
+      aiTypingTimeoutRef.current = null;
+    }, AI_TYPING_TIMEOUT_MS);
+  }
+
+  function clearAiTypingIndicator() {
+    setIsAiTyping(false);
+    if (aiTypingTimeoutRef.current) {
+      clearTimeout(aiTypingTimeoutRef.current);
+      aiTypingTimeoutRef.current = null;
+    }
+  }
+
   const pendingSentCount = useMemo(() => {
     if (!currentUser?.id) {
       return 0;
@@ -1360,6 +1418,16 @@ export default function ConversationPage() {
       (message) => message.senderId === currentUser.id && !message.isUnsent
     ).length;
   }, [currentUser?.id, messages]);
+  const todaysAISentCount = useMemo(() => {
+    if (!participantIsSystem || !currentUser?.id) {
+      return 0;
+    }
+
+    return countTodaysMessagesByUser(messages, currentUser.id);
+  }, [participantIsSystem, currentUser?.id, messages]);
+  const hasReachedAIDailyLimit =
+    participantIsSystem &&
+    (aiDailyLimitReached || todaysAISentCount >= AI_DAILY_MESSAGE_LIMIT);
   const hasReachedPendingLimit = isPendingRequester && pendingSentCount >= 3;
   const canSendPendingRequest =
     isPendingRequester &&
@@ -1369,7 +1437,8 @@ export default function ConversationPage() {
     !hasReachedPendingLimit &&
     Boolean(participantUsername);
   const canSendMessage =
-    isPendingRequester ? canSendPendingRequest : canSend;
+    (isPendingRequester ? canSendPendingRequest : canSend) &&
+    !hasReachedAIDailyLimit;
   const showMicInsteadOfSend =
     !hasComposerContent && !hasComposerImage && !isVoiceRecording;
   const showMicInsteadOfSendPending =
@@ -1453,7 +1522,7 @@ export default function ConversationPage() {
     durationSeconds: number,
     thumbnailUrl: string
   ) {
-    if (!conversationId || !currentUser?.id) {
+    if (!conversationId || !currentUser?.id || hasReachedAIDailyLimit) {
       return;
     }
 
@@ -1519,13 +1588,20 @@ export default function ConversationPage() {
           message.id === tempId ? createdMessage : message
         )
       );
+      if (participantIsSystem) {
+        startAiTypingIndicator();
+      }
     } catch (error) {
       setMessages((current) =>
         current.filter((message) => message.id !== tempId)
       );
-      toast.error(
-        error instanceof Error ? error.message : "Failed to send video message"
-      );
+      if (isDailyLimitReachedError(error)) {
+        setAiDailyLimitReached(true);
+      } else {
+        toast.error(
+          error instanceof Error ? error.message : "Failed to send video message"
+        );
+      }
     } finally {
       setVideoUploadProgressById((current) => {
         const next = { ...current };
@@ -1790,6 +1866,10 @@ export default function ConversationPage() {
   }, [conversationId]);
 
   useEffect(() => {
+    setAiDailyLimitReached(false);
+  }, [conversationId]);
+
+  useEffect(() => {
     if (!conversationId) {
       return;
     }
@@ -1813,6 +1893,10 @@ export default function ConversationPage() {
           return current;
         }
 
+        if (participantIsSystem) {
+          clearAiTypingIndicator();
+        }
+
         markCurrentConversationRead();
 
         return [...current, event.message];
@@ -1829,7 +1913,15 @@ export default function ConversationPage() {
     });
 
     return unsubscribe;
-  }, [conversationId, currentUser?.id]);
+  }, [conversationId, currentUser?.id, participantIsSystem]);
+
+  useEffect(() => {
+    return () => {
+      if (aiTypingTimeoutRef.current) {
+        clearTimeout(aiTypingTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!conversationId) {
@@ -2155,16 +2247,24 @@ export default function ConversationPage() {
       requestAnimationFrame(() => {
         messageInputRef.current?.focus();
       });
+      if (participantIsSystem && !isPendingRequester) {
+        startAiTypingIndicator();
+      }
     } catch (error) {
-      const status = getApiErrorStatus(error);
-      const message =
-        error instanceof Error ? error.message : "Something went wrong";
-
-      if (status === 410) {
-        toast.error(message);
+      if (isDailyLimitReachedError(error)) {
+        setAiDailyLimitReached(true);
         setSendError(null);
       } else {
-        setSendError(message);
+        const status = getApiErrorStatus(error);
+        const message =
+          error instanceof Error ? error.message : "Something went wrong";
+
+        if (status === 410) {
+          toast.error(message);
+          setSendError(null);
+        } else {
+          setSendError(message);
+        }
       }
     } finally {
       setIsSending(false);
@@ -2172,7 +2272,7 @@ export default function ConversationPage() {
   }
 
   async function handleVoiceComplete(blob: Blob, durationSeconds: number) {
-    if (!conversationId || !currentUser?.id) {
+    if (!conversationId || !currentUser?.id || hasReachedAIDailyLimit) {
       return;
     }
 
@@ -2233,13 +2333,20 @@ export default function ConversationPage() {
           message.id === tempId ? createdMessage : message
         )
       );
+      if (participantIsSystem) {
+        startAiTypingIndicator();
+      }
     } catch (error) {
       setMessages((current) =>
         current.filter((message) => message.id !== tempId)
       );
-      toast.error(
-        error instanceof Error ? error.message : "Failed to send voice message"
-      );
+      if (isDailyLimitReachedError(error)) {
+        setAiDailyLimitReached(true);
+      } else {
+        toast.error(
+          error instanceof Error ? error.message : "Failed to send voice message"
+        );
+      }
     } finally {
       setIsSending(false);
     }
@@ -2520,8 +2627,15 @@ export default function ConversationPage() {
                 </div>
 
                 <div className="min-w-0 flex-1 overflow-hidden">
-                  <p className="truncate text-sm font-semibold text-text-primary">
-                    {headerName}
+                  <p className="flex items-center gap-1 truncate text-sm font-semibold text-text-primary">
+                    <span className="truncate">{headerName}</span>
+                    {participantIsSystem ? (
+                      <Sparkles
+                        className="size-3.5 shrink-0 text-accent"
+                        strokeWidth={2}
+                        aria-label="AI Assistant"
+                      />
+                    ) : null}
                   </p>
                   {isGroupChat ? (
                     <p className="truncate text-xs text-text-muted">
@@ -2530,13 +2644,15 @@ export default function ConversationPage() {
                     </p>
                   ) : (
                     <p className="truncate text-xs text-text-muted">
-                      {participantIsOnline
-                        ? "Online"
-                        : participantLastSeen
-                          ? `Last seen ${formatLastSeen(participantLastSeen)}`
-                          : participantUsername
-                            ? `@${participantUsername}`
-                            : "Offline"}
+                      {isAiTyping
+                        ? "typing..."
+                        : participantIsOnline
+                          ? "Online"
+                          : participantLastSeen
+                            ? `Last seen ${formatLastSeen(participantLastSeen)}`
+                            : participantUsername
+                              ? `@${participantUsername}`
+                              : "Offline"}
                     </p>
                   )}
                 </div>
@@ -2756,6 +2872,10 @@ export default function ConversationPage() {
           ) : isDeletedParticipant ? (
             <div className="rounded-[13px] border border-border/70 bg-surface-1/40 px-3.5 py-3 text-center text-[13px] leading-relaxed text-text-secondary">
               You can&apos;t message this user — this account no longer exists.
+            </div>
+          ) : hasReachedAIDailyLimit ? (
+            <div className="rounded-[13px] border border-border/70 bg-surface-1/40 px-3.5 py-3 text-center text-[13px] leading-relaxed text-text-secondary">
+              {AI_DAILY_LIMIT_MESSAGE}
             </div>
           ) : hasReachedPendingLimit ? (
             <div className="rounded-[13px] border border-border/70 bg-surface-1/40 px-3.5 py-3 text-center text-[13px] leading-relaxed text-text-secondary">

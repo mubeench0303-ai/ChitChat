@@ -32,6 +32,8 @@ type Config struct {
 	CloudinaryCloudName string
 	CloudinaryAPIKey    string
 	CloudinaryAPISecret string
+
+	GeminiAPIKey string
 }
 
 func LoadConfig() (*Config, error) {
@@ -58,6 +60,7 @@ func LoadConfig() (*Config, error) {
 		CloudinaryCloudName: getEnv("CLOUDINARY_CLOUD_NAME", ""),
 		CloudinaryAPIKey:    getEnv("CLOUDINARY_API_KEY", ""),
 		CloudinaryAPISecret: getEnv("CLOUDINARY_API_SECRET", ""),
+		GeminiAPIKey:        getEnv("GEMINI_API_KEY", ""),
 	}
 
 	if cfg.DBPassword == "" {

@@ -72,6 +72,7 @@ type ConversationWithPreview struct {
 	RequestedAt           time.Time  `json:"requestedAt"`
 	RequesterIsOnline     *bool      `json:"requesterIsOnline,omitempty"`
 	RequesterLastSeen     *time.Time `json:"requesterLastSeen,omitempty"`
+	ParticipantIsSystem   bool       `json:"participantIsSystem,omitempty"`
 	UnreadCount           int        `json:"unreadCount"`
 	IsPinned              bool       `json:"isPinned"`
 	IsMuted               bool       `json:"isMuted"`
@@ -97,6 +98,7 @@ type ConversationHeaderInfo struct {
 	ParticipantAvatarURL *string    `json:"participantAvatarUrl,omitempty"`
 	ParticipantIsOnline  *bool      `json:"participantIsOnline,omitempty"`
 	ParticipantLastSeen  *time.Time `json:"participantLastSeen,omitempty"`
+	ParticipantIsSystem  *bool      `json:"participantIsSystem,omitempty"`
 
 	GroupName      *string `json:"groupName,omitempty"`
 	GroupAvatarURL *string `json:"groupAvatarUrl,omitempty"`

@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { BellOff, Loader2, MoreVertical, Pin, Search, Trash2, Users, UserRoundPlus } from "lucide-react";
+import { BellOff, Loader2, MoreVertical, Pin, Search, Sparkles, Trash2, Users, UserRoundPlus } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -341,6 +341,7 @@ function ChatRow({
   const isGroup = conversation.type === "group";
   const isPinned = conversation.isPinned ?? false;
   const isMuted = conversation.isMuted ?? false;
+  const isSystemParticipant = conversation.participantIsSystem === true;
   const displayName = getConversationDisplayName(conversation);
   const displayAvatarUrl = isGroup
     ? conversation.groupAvatarUrl
@@ -378,8 +379,15 @@ function ChatRow({
           </div>
 
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-semibold text-text-primary">
-              {displayName}
+            <p className="flex items-center gap-1 truncate text-sm font-semibold text-text-primary">
+              <span className="truncate">{displayName}</span>
+              {isSystemParticipant ? (
+                <Sparkles
+                  className="size-3.5 shrink-0 text-accent"
+                  strokeWidth={2}
+                  aria-label="AI Assistant"
+                />
+              ) : null}
             </p>
             <p
               className={cn(
@@ -461,7 +469,7 @@ function ChatRow({
               <BellOff className="size-4" strokeWidth={2} />
               {isMuted ? "Unmute Notifications" : "Mute Notifications"}
             </DropdownMenuItem>
-            {!isGroup ? (
+            {!isGroup && !isSystemParticipant ? (
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={onClear}>
@@ -474,6 +482,14 @@ function ChatRow({
                 </DropdownMenuItem>
                 <DropdownMenuItem variant="destructive" onClick={onBlock}>
                   Block User
+                </DropdownMenuItem>
+              </>
+            ) : !isGroup ? (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={onClear}>
+                  <Trash2 className="size-4" strokeWidth={2} />
+                  Delete All Chat
                 </DropdownMenuItem>
               </>
             ) : null}

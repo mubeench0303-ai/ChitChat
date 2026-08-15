@@ -452,6 +452,13 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"message": message})
 }
 
+func writeErrorWithCode(w http.ResponseWriter, status int, message, code string) {
+	writeJSON(w, status, map[string]string{
+		"message": message,
+		"code":    code,
+	})
+}
+
 func parseFormDurationSeconds(raw string) (int, bool) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

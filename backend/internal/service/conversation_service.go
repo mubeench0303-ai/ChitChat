@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 
 	"github.com/google/uuid"
 
@@ -59,6 +60,10 @@ var (
 	ErrInvalidBackgroundType          = errors.New("invalid background type")
 	ErrInvalidBackgroundPreset        = errors.New("invalid background preset")
 	ErrInvalidBackgroundValue         = errors.New("background value is required")
+	ErrSystemUserActionNotAllowed     = errors.New("this action is not available for the AI Assistant")
+	ErrCannotMessageSystemUser        = errors.New("you cannot send a message request to the AI Assistant")
+	ErrCannotAddSystemUserToGroup     = errors.New("the AI Assistant cannot be added to groups")
+	ErrAIDailyMessageLimitReached     = errors.New("You've reached today's limit of 15 messages to AI Assistant. Come back after midnight to continue.")
 )
 
 const (
@@ -84,6 +89,7 @@ type ConversationService struct {
 	notifications NotificationService
 	cloudinary    *cloudinary.Client
 	privacy       PrivacyChecker
+	assistant     *AssistantService
 }
 
 func NewConversationService(
@@ -93,6 +99,7 @@ func NewConversationService(
 	notifications NotificationService,
 	cloudinaryClient *cloudinary.Client,
 	privacy PrivacyChecker,
+	assistant *AssistantService,
 ) *ConversationService {
 	return &ConversationService{
 		users:         users,
@@ -101,7 +108,70 @@ func NewConversationService(
 		notifications: notifications,
 		cloudinary:    cloudinaryClient,
 		privacy:       privacy,
+		assistant:     assistant,
 	}
+}
+
+func (s *ConversationService) rejectIfSystemDirectConversation(
+	ctx context.Context,
+	conversationID, userID uuid.UUID,
+) error {
+	conversation, err := s.conversations.GetByID(ctx, conversationID)
+	if errors.Is(err, repository.ErrNotFound) {
+		return ErrConversationNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("conversation: failed to fetch conversation: %w", err)
+	}
+
+	if conversation.Type != models.ConversationTypeDirect {
+		return nil
+	}
+
+	otherUserID, err := s.conversations.GetOtherParticipantID(ctx, conversationID, userID)
+	if err != nil {
+		return fmt.Errorf("conversation: failed to resolve other participant: %w", err)
+	}
+
+	otherUser, err := s.users.GetUserByID(ctx, otherUserID.String())
+	if errors.Is(err, repository.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("conversation: failed to load other participant: %w", err)
+	}
+
+	if otherUser.IsSystem {
+		return ErrSystemUserActionNotAllowed
+	}
+
+	return nil
+}
+
+func (s *ConversationService) maybeTriggerAssistantReply(
+	ctx context.Context,
+	userID, conversationID uuid.UUID,
+	conversation *models.Conversation,
+) {
+	if s.assistant == nil || conversation.Type != models.ConversationTypeDirect {
+		return
+	}
+
+	otherUserID, err := s.conversations.GetOtherParticipantID(ctx, conversationID, userID)
+	if err != nil {
+		return
+	}
+
+	otherUser, err := s.users.GetUserByID(ctx, otherUserID.String())
+	if err != nil || !otherUser.IsSystem {
+		return
+	}
+
+	go func() {
+		if err := s.assistant.GenerateAndSendReply(context.Background(), conversationID, userID); err != nil {
+			log.Printf("assistant: failed to generate reply for conversation %s: %v", conversationID, err)
+		}
+	}()
 }
 
 func (s *ConversationService) RemoveConnection(
@@ -118,6 +188,10 @@ func (s *ConversationService) RemoveConnection(
 
 	if !canManageAcceptedConversation(ctx, s.conversations, conversation, userID) {
 		return ErrNotAuthorized
+	}
+
+	if err := s.rejectIfSystemDirectConversation(ctx, conversationID, userID); err != nil {
+		return err
 	}
 
 	if err := s.conversations.DeleteConversation(ctx, conversationID); err != nil {

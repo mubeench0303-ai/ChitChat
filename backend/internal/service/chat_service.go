@@ -19,6 +19,8 @@ import (
 	"github.com/mubeench0303-ai/ChitChat/backend/internal/repository"
 )
 
+const maxDailyAIMessagesPerUser = 15
+
 const (
 	maxMessageContentLength        = 2000
 	maxMessageImageSizeBytes       = 5 << 20
@@ -730,6 +732,10 @@ func (s *ConversationService) SendChatMessage(
 		if otherUser.IsDeleted {
 			return nil, ErrRecipientNoLongerExists
 		}
+
+		if err := s.ensureAIDailyMessageLimit(ctx, userID, otherUser); err != nil {
+			return nil, err
+		}
 	}
 
 	trimmedContent := strings.TrimSpace(content)
@@ -940,6 +946,8 @@ func (s *ConversationService) SendChatMessage(
 		applyMessageStatus(message, nil, userID.String())
 	}
 
+	s.maybeTriggerAssistantReply(ctx, userID, conversationID, conversation)
+
 	return message, nil
 }
 
@@ -988,6 +996,10 @@ func (s *ConversationService) SendVoiceMessage(
 
 		if otherUser.IsDeleted {
 			return nil, ErrRecipientNoLongerExists
+		}
+
+		if err := s.ensureAIDailyMessageLimit(ctx, userID, otherUser); err != nil {
+			return nil, err
 		}
 	}
 
@@ -1193,6 +1205,8 @@ func (s *ConversationService) SendVoiceMessage(
 		applyMessageStatus(message, nil, userID.String())
 	}
 
+	s.maybeTriggerAssistantReply(ctx, userID, conversationID, conversation)
+
 	return message, nil
 }
 
@@ -1241,6 +1255,10 @@ func (s *ConversationService) SendVideoMessage(
 
 		if otherUser.IsDeleted {
 			return nil, ErrRecipientNoLongerExists
+		}
+
+		if err := s.ensureAIDailyMessageLimit(ctx, userID, otherUser); err != nil {
+			return nil, err
 		}
 	}
 
@@ -1445,6 +1463,8 @@ func (s *ConversationService) SendVideoMessage(
 	} else {
 		applyMessageStatus(message, nil, userID.String())
 	}
+
+	s.maybeTriggerAssistantReply(ctx, userID, conversationID, conversation)
 
 	return message, nil
 }
@@ -1697,4 +1717,25 @@ func isAllowedVideoContentType(contentType string) bool {
 	}
 
 	return strings.HasPrefix(contentType, "video/")
+}
+
+func (s *ConversationService) ensureAIDailyMessageLimit(
+	ctx context.Context,
+	userID uuid.UUID,
+	otherUser *models.User,
+) error {
+	if otherUser == nil || !otherUser.IsSystem {
+		return nil
+	}
+
+	count, err := s.conversations.CountTodaysMessagesToAI(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("conversation: failed to count today's AI messages: %w", err)
+	}
+
+	if count >= maxDailyAIMessagesPerUser {
+		return ErrAIDailyMessageLimitReached
+	}
+
+	return nil
 }

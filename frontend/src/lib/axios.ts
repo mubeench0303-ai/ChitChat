@@ -10,31 +10,36 @@ const api = axios.create({
   },
 });
 
-function extractErrorMessage(error: unknown): string {
+function extractErrorDetails(error: unknown): { message: string; code?: string } {
   if (isAxiosError(error)) {
     const data = error.response?.data;
 
     if (data && typeof data === "object") {
       const body = data as Record<string, unknown>;
+      const code =
+        typeof body.code === "string" && body.code.trim()
+          ? body.code.trim()
+          : undefined;
 
       if (typeof body.message === "string" && body.message.trim()) {
-        return body.message;
+        return { message: body.message, code };
       }
 
       if (typeof body.error === "string" && body.error.trim()) {
-        return body.error;
+        return { message: body.error, code };
       }
     }
   }
 
-  return "Something went wrong";
+  return { message: "Something went wrong" };
 }
 
 api.interceptors.response.use(
   (response) => response.data,
   (error) => {
     const status = isAxiosError(error) ? error.response?.status : undefined;
-    return Promise.reject(new ApiError(extractErrorMessage(error), status));
+    const { message, code } = extractErrorDetails(error);
+    return Promise.reject(new ApiError(message, status, code));
   }
 );
 

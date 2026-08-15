@@ -55,6 +55,9 @@ func (s *ConversationService) CreateGroup(
 		if memberUser.IsDeleted {
 			return nil, ErrGroupMemberNotFound
 		}
+		if memberUser.IsSystem {
+			return nil, ErrCannotAddSystemUserToGroup
+		}
 
 		uniqueMemberIDs = append(uniqueMemberIDs, memberID)
 	}

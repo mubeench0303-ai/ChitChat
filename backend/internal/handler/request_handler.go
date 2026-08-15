@@ -49,7 +49,8 @@ func (h *ConversationHandler) SendMessageRequest(w http.ResponseWriter, r *http.
 		return
 	}
 	if errors.Is(err, service.ErrCannotMessageSelf) ||
-		errors.Is(err, service.ErrConversationBlocked) {
+		errors.Is(err, service.ErrConversationBlocked) ||
+		errors.Is(err, service.ErrCannotMessageSystemUser) {
 		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}

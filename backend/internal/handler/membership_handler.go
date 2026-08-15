@@ -58,7 +58,8 @@ func (h *ConversationHandler) AddGroupMembers(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if errors.Is(err, service.ErrGroupAddMembersRequired) ||
-		errors.Is(err, service.ErrGroupMemberNotFound) {
+		errors.Is(err, service.ErrGroupMemberNotFound) ||
+		errors.Is(err, service.ErrCannotAddSystemUserToGroup) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}

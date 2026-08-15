@@ -128,6 +128,85 @@ func (r *ConversationRepository) Create(
 	return &conversation, nil
 }
 
+func (r *ConversationRepository) CreateAcceptedDirect(
+	ctx context.Context,
+	userA, userB uuid.UUID,
+) (*models.Conversation, error) {
+	pairKey := directPairKey(userA, userB)
+	status := models.ConversationStatusAccepted
+	createdBy := userA.String()
+
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	const insertConversationQuery = `
+		INSERT INTO conversations (
+			type, direct_pair_key, status, requested_by, created_by
+		)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING` + conversationSelectColumns
+
+	var conversation models.Conversation
+
+	err = tx.QueryRow(
+		ctx,
+		insertConversationQuery,
+		models.ConversationTypeDirect,
+		pairKey,
+		status,
+		createdBy,
+		createdBy,
+	).Scan(
+		&conversation.ID,
+		&conversation.Type,
+		&conversation.Name,
+		&conversation.AvatarURL,
+		&conversation.CreatedBy,
+		&conversation.DirectPairKey,
+		&conversation.Status,
+		&conversation.RequestedBy,
+		&conversation.BlockedBy,
+		&conversation.CreatedAt,
+		&conversation.UpdatedAt,
+	)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return r.FindBetweenUsers(ctx, userA, userB)
+		}
+
+		return nil, err
+	}
+
+	const insertMemberQuery = `
+		INSERT INTO conversation_members (conversation_id, user_id, role)
+		VALUES ($1, $2, $3)`
+
+	for _, memberID := range []uuid.UUID{userA, userB} {
+		if _, err := tx.Exec(
+			ctx,
+			insertMemberQuery,
+			conversation.ID,
+			memberID.String(),
+			models.ConversationMemberRoleMember,
+		); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		if isUniqueViolation(err) {
+			return r.FindBetweenUsers(ctx, userA, userB)
+		}
+
+		return nil, err
+	}
+
+	return &conversation, nil
+}
+
 func (r *ConversationRepository) ListIncomingRequests(
 	ctx context.Context,
 	userID uuid.UUID,

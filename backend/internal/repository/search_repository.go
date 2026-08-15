@@ -29,6 +29,7 @@ func (r *UserRepository) SearchByUsername(
 		FROM users
 		WHERE id <> $1
 		  AND is_deleted = FALSE
+		  AND is_system = FALSE
 		  AND (
 		    username ILIKE '%' || $2 || '%' ESCAPE '\'
 		    OR full_name ILIKE '%' || $2 || '%' ESCAPE '\'
@@ -103,6 +104,7 @@ func (r *UserRepository) GetPublicProfileByUsername(
 			u.bio,
 			u.avatar_url,
 			u.is_deleted,
+			u.is_system,
 			c.id,
 			c.status
 		FROM users u
@@ -133,6 +135,7 @@ func (r *UserRepository) GetPublicProfileByUsername(
 		&user.Bio,
 		&user.AvatarURL,
 		&user.IsDeleted,
+		&user.IsSystem,
 		&conversationID,
 		&conversationStatus,
 	)

@@ -33,6 +33,10 @@ func (s *ConversationService) SendMessageRequest(
 		return nil, ErrPublicProfileNotFound
 	}
 
+	if targetUser.IsSystem {
+		return nil, ErrCannotMessageSystemUser
+	}
+
 	targetID, err := uuid.Parse(targetUser.ID)
 	if err != nil {
 		return nil, fmt.Errorf("conversation: invalid target user id: %w", err)
@@ -360,6 +364,10 @@ func (s *ConversationService) BlockConnection(
 
 	if !canManageAcceptedConversation(ctx, s.conversations, conversation, userID) {
 		return ErrNotAuthorized
+	}
+
+	if err := s.rejectIfSystemDirectConversation(ctx, conversationID, userID); err != nil {
+		return err
 	}
 
 	if err := s.conversations.BlockConversation(ctx, conversationID, userID); err != nil {

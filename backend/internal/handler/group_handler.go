@@ -52,7 +52,8 @@ func (h *ConversationHandler) CreateGroup(w http.ResponseWriter, r *http.Request
 	if errors.Is(err, service.ErrInvalidGroupName) ||
 		errors.Is(err, service.ErrGroupNameTooLong) ||
 		errors.Is(err, service.ErrGroupMembersRequired) ||
-		errors.Is(err, service.ErrGroupMemberNotFound) {
+		errors.Is(err, service.ErrGroupMemberNotFound) ||
+		errors.Is(err, service.ErrCannotAddSystemUserToGroup) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}

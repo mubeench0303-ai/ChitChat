@@ -19,6 +19,7 @@ import (
 	"github.com/mubeench0303-ai/ChitChat/backend/internal/ws"
 	"github.com/mubeench0303-ai/ChitChat/backend/pkg/cloudinary"
 	"github.com/mubeench0303-ai/ChitChat/backend/pkg/email"
+	"github.com/mubeench0303-ai/ChitChat/backend/pkg/gemini"
 	"github.com/mubeench0303-ai/ChitChat/backend/pkg/jwt"
 )
 
@@ -26,6 +27,10 @@ func main() {
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
+	}
+
+	if cfg.GeminiAPIKey == "" {
+		log.Println("WARNING: GEMINI_API_KEY is not set — AI Assistant replies will use fallback messages only")
 	}
 
 	ctx, stopBackgroundJobs := context.WithCancel(context.Background())
@@ -55,6 +60,15 @@ func main() {
 		cfg.CloudinaryAPIKey,
 		cfg.CloudinaryAPISecret,
 	)
+	geminiClient := gemini.NewClient(cfg.GeminiAPIKey)
+	hub := ws.NewHub()
+	notificationService := service.NewHubNotificationService(hub)
+	assistantService := service.NewAssistantService(
+		conversationRepo,
+		userRepo,
+		notificationService,
+		geminiClient,
+	)
 	authService := service.NewAuthService(
 		pool,
 		userRepo,
@@ -63,9 +77,8 @@ func main() {
 		mailer,
 		cloudinaryClient,
 		jwtHelper,
+		assistantService,
 	)
-	hub := ws.NewHub()
-	notificationService := service.NewHubNotificationService(hub)
 	conversationService := service.NewConversationService(
 		userRepo,
 		conversationRepo,
@@ -73,6 +86,7 @@ func main() {
 		notificationService,
 		cloudinaryClient,
 		authService,
+		assistantService,
 	)
 	statusService := service.NewStatusService(statusRepo, userRepo, authService)
 	statusService.StartCleanupJob(ctx)
@@ -134,5 +148,3 @@ func main() {
 
 	log.Println("server stopped")
 }
-
-// test

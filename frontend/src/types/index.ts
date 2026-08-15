@@ -74,6 +74,7 @@ export interface ChatConversation {
   requestedAt: string;
   requesterIsOnline?: boolean;
   requesterLastSeen?: string | null;
+  participantIsSystem?: boolean;
   unreadCount?: number;
   isPinned?: boolean;
   isMuted?: boolean;
@@ -89,6 +90,7 @@ export interface ConversationHeaderInfo {
   participantAvatarUrl?: string | null;
   participantIsOnline?: boolean;
   participantLastSeen?: string | null;
+  participantIsSystem?: boolean;
   groupName?: string | null;
   groupAvatarUrl?: string | null;
   memberCount?: number;

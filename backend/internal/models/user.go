@@ -17,6 +17,7 @@ type User struct {
 	LastSeen                  *time.Time `json:"lastSeen,omitempty"`
 	NotificationSoundEnabled  bool       `json:"notificationSoundEnabled"`
 	IsDeleted                 bool       `json:"isDeleted"`
+	IsSystem                  bool       `json:"-"`
 	DeletedAt    *time.Time `json:"deletedAt,omitempty"`
 	CreatedAt    time.Time  `json:"createdAt"`
 	UpdatedAt    time.Time  `json:"updatedAt"`

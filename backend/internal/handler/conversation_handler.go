@@ -62,6 +62,10 @@ func (h *ConversationHandler) manageConversation(
 		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}
+	if errors.Is(err, service.ErrSystemUserActionNotAllowed) {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to process request")
 		return

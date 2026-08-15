@@ -350,6 +350,7 @@ func (r *ConversationRepository) ListConversations(
 			combined.requested_at,
 			combined.requester_is_online,
 			combined.requester_last_seen,
+			combined.participant_is_system,
 			combined.unread_count,
 			combined.is_pinned,
 			combined.is_muted
@@ -369,6 +370,7 @@ func (r *ConversationRepository) ListConversations(
 				c.updated_at AS requested_at,
 				u.is_online AS requester_is_online,
 				u.last_seen AS requester_last_seen,
+				u.is_system AS participant_is_system,
 				cm_self.is_pinned AS is_pinned,
 				cm_self.is_muted AS is_muted,
 				(
@@ -436,6 +438,7 @@ func (r *ConversationRepository) ListConversations(
 				c.updated_at AS requested_at,
 				NULL::boolean AS requester_is_online,
 				NULL::timestamptz AS requester_last_seen,
+				FALSE AS participant_is_system,
 				cm_self.is_pinned AS is_pinned,
 				cm_self.is_muted AS is_muted,
 				(
@@ -515,6 +518,7 @@ func (r *ConversationRepository) ListConversations(
 			&conversation.RequestedAt,
 			&conversation.RequesterIsOnline,
 			&conversation.RequesterLastSeen,
+			&conversation.ParticipantIsSystem,
 			&conversation.UnreadCount,
 			&conversation.IsPinned,
 			&conversation.IsMuted,
@@ -582,6 +586,117 @@ func (r *ConversationRepository) HideMessageForUser(
 
 	_, err := r.db.Exec(ctx, query, messageID.String(), userID.String())
 	return err
+}
+
+func (r *ConversationRepository) ListRecentMessagesForContext(
+	ctx context.Context,
+	conversationID uuid.UUID,
+	limit int,
+) ([]models.Message, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+
+	const query = `
+		SELECT
+			m.id,
+			m.conversation_id,
+			m.sender_id,
+			m.type,
+			m.content,
+			m.is_unsent,
+			m.created_at
+		FROM messages m
+		WHERE m.conversation_id = $1
+		ORDER BY m.created_at DESC
+		LIMIT $2`
+
+	rows, err := r.db.Query(ctx, query, conversationID.String(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	messages := make([]models.Message, 0)
+	for rows.Next() {
+		var message models.Message
+
+		if err := rows.Scan(
+			&message.ID,
+			&message.ConversationID,
+			&message.SenderID,
+			&message.Type,
+			&message.Content,
+			&message.IsUnsent,
+			&message.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+
+		messages = append(messages, message)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	for left, right := 0, len(messages)-1; left < right; left, right = left+1, right-1 {
+		messages[left], messages[right] = messages[right], messages[left]
+	}
+
+	return messages, nil
+}
+
+func karachiDayStartUTC() (time.Time, error) {
+	loc, err := time.LoadLocation("Asia/Karachi")
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	now := time.Now().In(loc)
+	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+
+	return start.UTC(), nil
+}
+
+func (r *ConversationRepository) CountTodaysMessagesToAI(
+	ctx context.Context,
+	userID uuid.UUID,
+) (int, error) {
+	assistantID, err := uuid.Parse(models.AIAssistantUserID)
+	if err != nil {
+		return 0, err
+	}
+
+	dayStart, err := karachiDayStartUTC()
+	if err != nil {
+		return 0, err
+	}
+
+	const query = `
+		SELECT COUNT(*)::int
+		FROM messages m
+		INNER JOIN conversations c ON c.id = m.conversation_id
+		WHERE m.sender_id = $1
+		  AND c.type = $2
+		  AND c.direct_pair_key = $3
+		  AND m.created_at >= $4`
+
+	var count int
+
+	err = r.db.QueryRow(
+		ctx,
+		query,
+		userID.String(),
+		models.ConversationTypeDirect,
+		directPairKey(userID, assistantID),
+		dayStart,
+	).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+
+	return count, nil
 }
 
 func (r *ConversationRepository) ListMessages(
@@ -853,7 +968,8 @@ func (r *ConversationRepository) GetConversationHeaderInfo(
 				u.avatar_url,
 				u.is_online,
 				u.last_seen,
-				u.is_deleted
+				u.is_deleted,
+				u.is_system
 			FROM conversation_members cm
 			JOIN users u ON u.id = cm.user_id
 			WHERE cm.conversation_id = $1
@@ -868,6 +984,7 @@ func (r *ConversationRepository) GetConversationHeaderInfo(
 			participantIsOnline bool
 			participantLastSeen *time.Time
 			isDeleted           bool
+			participantIsSystem bool
 		)
 
 		err := r.db.QueryRow(
@@ -883,6 +1000,7 @@ func (r *ConversationRepository) GetConversationHeaderInfo(
 			&participantIsOnline,
 			&participantLastSeen,
 			&isDeleted,
+			&participantIsSystem,
 		)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
@@ -907,6 +1025,7 @@ func (r *ConversationRepository) GetConversationHeaderInfo(
 		info.ParticipantAvatarURL = participantAvatar
 		info.ParticipantIsOnline = &participantIsOnline
 		info.ParticipantLastSeen = participantLastSeen
+		info.ParticipantIsSystem = &participantIsSystem
 
 	case models.ConversationTypeGroup:
 		const groupQuery = `
