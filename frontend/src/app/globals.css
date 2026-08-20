@@ -333,3 +333,195 @@
   animation-fill-mode: forwards;
   transform: scaleX(0);
 }
+
+@keyframes wave {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+
+  25% {
+    transform: rotate(14deg);
+  }
+
+  50% {
+    transform: rotate(-8deg);
+  }
+
+  75% {
+    transform: rotate(14deg);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes shake {
+  20% {
+    transform: translateX(-7px);
+  }
+
+  40% {
+    transform: translateX(6px);
+  }
+
+  60% {
+    transform: translateX(-4px);
+  }
+
+  80% {
+    transform: translateX(3px);
+  }
+}
+
+@keyframes auth-success-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes auth-success-confetti-fling {
+  0% {
+    transform: translate3d(-50%, -50%, 0) scale(0);
+    opacity: 1;
+  }
+
+  100% {
+    transform: translate3d(calc(-50% + var(--tx)), calc(-50% + var(--ty)), 0)
+      rotate(var(--r)) scale(1);
+    opacity: 0;
+  }
+}
+
+.auth-success-overlay {
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 0.5s cubic-bezier(0.16, 1, 0.3, 1),
+    visibility 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.auth-success-overlay.is-open {
+  opacity: 1;
+  visibility: visible;
+}
+
+.auth-success-card {
+  transform: scale(0.88) translate3d(0, 24px, 0);
+  transition: transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform;
+}
+
+.auth-success-overlay.is-open .auth-success-card {
+  transform: none;
+}
+
+.auth-success-okmark circle,
+.auth-success-okmark path {
+  fill: none;
+}
+
+.auth-success-okmark circle {
+  stroke: var(--accent);
+  stroke-width: 2.5;
+  stroke-dasharray: 240;
+  stroke-dashoffset: 240;
+}
+
+.auth-success-okmark path {
+  stroke: var(--success);
+  stroke-width: 3.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 52;
+  stroke-dashoffset: 52;
+}
+
+.auth-success-overlay.is-open .auth-success-okmark circle {
+  animation: auth-success-draw 0.9s 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.auth-success-overlay.is-open .auth-success-okmark path {
+  animation: auth-success-draw 0.5s 1.1s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.auth-success-title,
+.auth-success-copy,
+.auth-success-action,
+.auth-success-redirect {
+  opacity: 0;
+  transform: translate3d(0, 10px, 0);
+  transition:
+    opacity 0.5s cubic-bezier(0.16, 1, 0.3, 1),
+    transform 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.auth-success-title {
+  transition-delay: 0.6s;
+}
+
+.auth-success-copy {
+  transition-delay: 0.75s;
+}
+
+.auth-success-action {
+  transition-delay: 0.62s;
+}
+
+.auth-success-redirect {
+  transition-delay: 0.9s;
+}
+
+.auth-success-overlay.is-open .auth-success-title,
+.auth-success-overlay.is-open .auth-success-copy,
+.auth-success-overlay.is-open .auth-success-action,
+.auth-success-overlay.is-open .auth-success-redirect {
+  opacity: 1;
+  transform: none;
+}
+
+.auth-success-confetti-burst {
+  contain: strict;
+}
+
+.auth-success-confetti-particle {
+  position: absolute;
+  left: 50%;
+  top: 40%;
+  pointer-events: none;
+  user-select: none;
+  will-change: transform, opacity;
+  animation: auth-success-confetti-fling 1.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-success-overlay,
+  .auth-success-card,
+  .auth-success-title,
+  .auth-success-copy,
+  .auth-success-action,
+  .auth-success-redirect {
+    transition: none !important;
+  }
+
+  .auth-success-overlay.is-open .auth-success-okmark circle,
+  .auth-success-overlay.is-open .auth-success-okmark path,
+  .auth-success-confetti-particle {
+    animation: none !important;
+    stroke-dashoffset: 0;
+    opacity: 1;
+    transform: none;
+  }
+
+  .auth-success-card {
+    transform: none;
+  }
+}

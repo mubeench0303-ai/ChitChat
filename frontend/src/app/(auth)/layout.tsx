@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect } from "react";
 
 import { AuthShell } from "@/components/auth/auth-shell";
@@ -12,8 +12,11 @@ export default function AuthLayout({
   children: React.ReactNode;
 }>) {
   const router = useRouter();
+  const pathname = usePathname();
   const user = useAuthStore((state) => state.user);
   const isInitialized = useAuthStore((state) => state.isInitialized);
+
+  const isSplitLayout = pathname === "/login" || pathname === "/signup";
 
   useEffect(() => {
     if (isInitialized && user) {
@@ -25,5 +28,9 @@ export default function AuthLayout({
     return null;
   }
 
-  return <AuthShell>{children}</AuthShell>;
+  return (
+    <AuthShell variant={isSplitLayout ? "split" : "centered"}>
+      {children}
+    </AuthShell>
+  );
 }

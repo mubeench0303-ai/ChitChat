@@ -1,6 +1,5 @@
 "use client";
 
-import { Loader2 } from "lucide-react";
 import { motion, useReducedMotion } from "framer-motion";
 
 import { cn } from "@/lib/utils";
@@ -41,7 +40,8 @@ export function SignupSubmitButton({
       disabled={isDisabled}
       initial="rest"
       whileHover={reduceMotion || isDisabled ? "rest" : "hover"}
-      whileTap={reduceMotion || isDisabled ? "rest" : "tap"}      variants={{
+      whileTap={reduceMotion || isDisabled ? "rest" : "tap"}
+      variants={{
         rest: { y: 0 },
         hover: { y: -3 },
         tap: { y: -1 },
@@ -101,30 +101,49 @@ export function SignupSubmitButton({
       />
 
       <span className="relative z-10 flex h-full items-center justify-between px-[22px] pr-[18px] text-[13px] font-bold text-white">
-        <span className="flex items-center gap-2">
-          {loading ? (
-            <Loader2
-              className={cn("size-4 animate-spin", reduceMotion && "animate-none")}
-              strokeWidth={2.5}
-            />
-          ) : null}
-          {children}
-        </span>
-        {!loading ? (
-          <motion.span
-            aria-hidden
-            className="grid size-[25px] place-items-center rounded-lg bg-white/18 text-lg leading-none"
-            variants={{
-              rest: { x: 0, scale: 1 },
-              hover: { x: 4, scale: 1.08 },
-              tap: { x: 2, scale: 1.04 },
-            }}
-            transition={{ type: "spring", stiffness: 400, damping: 20 }}
+        {loading ? (
+          <span
+            aria-label="Creating account"
+            className="mx-auto flex gap-1.5"
           >
-            →
-          </motion.span>
-        ) : null}
-      </span>    </motion.button>
+            <i
+              className={cn(
+                "size-1.5 animate-bounce rounded-full bg-white",
+                reduceMotion && "animate-none"
+              )}
+            />
+            <i
+              className={cn(
+                "size-1.5 animate-bounce rounded-full bg-white [animation-delay:150ms]",
+                reduceMotion && "animate-none"
+              )}
+            />
+            <i
+              className={cn(
+                "size-1.5 animate-bounce rounded-full bg-white [animation-delay:300ms]",
+                reduceMotion && "animate-none"
+              )}
+            />
+          </span>
+        ) : (
+          <>
+            <span className="flex items-center gap-2">{children}</span>
+            <motion.span
+              aria-hidden
+              className="grid size-[25px] place-items-center rounded-lg bg-white/18 text-lg leading-none"
+              variants={{
+                rest: { x: 0, scale: 1 },
+                hover: { x: 4, scale: 1.08 },
+                tap: { x: 2, scale: 1.04 },
+              }}
+              transition={{ type: "spring", stiffness: 400, damping: 20 }}
+            >
+              →
+            </motion.span>
+          </>
+        )}
+      </span>
+    </motion.button>
   );
 }
 

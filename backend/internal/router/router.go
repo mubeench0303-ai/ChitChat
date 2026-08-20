@@ -53,13 +53,14 @@ func New(
 			auth.Post("/login", authHandler.Login)
 			auth.Post("/resend-verification", authHandler.ResendVerification)
 			auth.Post("/forgot-password", authHandler.ForgotPassword)
+			auth.Post("/verify-reset-code", authHandler.VerifyResetCode)
 			auth.Post("/reset-password", authHandler.ResetPassword)
 			auth.Post("/logout", authHandler.Logout)
+			auth.With(authMiddleware.OptionalAuth).Get("/check-username", authHandler.CheckUsername)
 
 			auth.Group(func(protected chi.Router) {
 				protected.Use(authMiddleware.RequireAuth)
 				protected.Get("/me", authHandler.Me)
-				protected.Get("/check-username", authHandler.CheckUsername)
 				protected.Patch("/profile/avatar", authHandler.UpdateAvatar)
 				protected.Delete("/profile/avatar", authHandler.RemoveAvatar)
 				protected.Patch("/profile", authHandler.UpdateProfile)

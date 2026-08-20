@@ -65,6 +65,13 @@ export function forgotPassword(email: string): Promise<{ message: string }> {
   return api.post<{ message: string }>("/auth/forgot-password", { email });
 }
 
+export function verifyResetCode(data: {
+  email: string;
+  code: string;
+}): Promise<{ message: string }> {
+  return api.post<{ message: string }>("/auth/verify-reset-code", data);
+}
+
 export function resetPassword(data: {
   email: string;
   code: string;

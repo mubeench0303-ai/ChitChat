@@ -197,31 +197,41 @@ func (h *AuthHandler) RemoveAvatar(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) CheckUsername(w http.ResponseWriter, r *http.Request) {
-	userIDStr, ok := middleware.GetUserID(r.Context())
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "Unauthorized")
-		return
-	}
-
-	userID, err := uuid.Parse(userIDStr)
-	if err != nil {
-		writeError(w, http.StatusUnauthorized, "Unauthorized")
-		return
-	}
-
 	username := strings.TrimSpace(r.URL.Query().Get("username"))
 	if username == "" {
 		writeError(w, http.StatusBadRequest, "Username is required")
 		return
 	}
 
-	available, err := h.auth.CheckUsernameAvailability(r.Context(), userID, username)
-	if errors.Is(err, service.ErrInvalidUsername) {
-		writeJSON(w, http.StatusOK, map[string]bool{"available": false})
+	userIDStr, ok := middleware.GetUserID(r.Context())
+	if ok {
+		userID, err := uuid.Parse(userIDStr)
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, "Unauthorized")
+			return
+		}
+
+		available, err := h.auth.CheckUsernameAvailability(r.Context(), userID, username)
+		if errors.Is(err, service.ErrInvalidUsername) {
+			writeJSON(w, http.StatusOK, map[string]bool{"available": false})
+			return
+		}
+		if errors.Is(err, service.ErrUserNotFound) {
+			writeError(w, http.StatusUnauthorized, "Unauthorized")
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "Failed to check username")
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]bool{"available": available})
 		return
 	}
-	if errors.Is(err, service.ErrUserNotFound) {
-		writeError(w, http.StatusUnauthorized, "Unauthorized")
+
+	available, err := h.auth.CheckSignupUsernameAvailability(r.Context(), username)
+	if errors.Is(err, service.ErrInvalidUsername) {
+		writeJSON(w, http.StatusOK, map[string]bool{"available": false})
 		return
 	}
 	if err != nil {

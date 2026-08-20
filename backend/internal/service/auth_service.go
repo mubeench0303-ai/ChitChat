@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -97,6 +98,8 @@ func NewAuthService(
 }
 
 func (s *AuthService) Signup(ctx context.Context, fullName, username, email, password string) (*SignupResult, error) {
+	username = strings.ToLower(strings.TrimSpace(username))
+	email = strings.TrimSpace(email)
 	existingUser, err := s.users.GetUserByEmail(ctx, email)
 	if err == nil {
 		if existingUser.IsVerified {
@@ -382,6 +385,19 @@ func (s *AuthService) ForgotPassword(ctx context.Context, email string) error {
 	return nil
 }
 
+func (s *AuthService) VerifyResetCode(ctx context.Context, email, code string) error {
+	user, err := s.users.GetUserByEmail(ctx, email)
+	if errors.Is(err, repository.ErrNotFound) {
+		return ErrInvalidVerificationCode
+	}
+	if err != nil {
+		return fmt.Errorf("auth: failed to find user: %w", err)
+	}
+
+	_, err = s.validateVerificationCode(ctx, user.ID, code, verificationTypePasswordReset)
+	return err
+}
+
 func (s *AuthService) ResetPassword(ctx context.Context, email, code, newPassword string) error {
 	user, err := s.users.GetUserByEmail(ctx, email)
 	if errors.Is(err, repository.ErrNotFound) {
@@ -448,6 +464,7 @@ func (s *AuthService) validateVerificationCode(
 }
 
 func (s *AuthService) ensureUsernameAvailable(ctx context.Context, username string) error {
+	username = strings.ToLower(strings.TrimSpace(username))
 	_, err := s.users.GetUserByUsername(ctx, username)
 	if err == nil {
 		return ErrUsernameAlreadyExists
@@ -456,6 +473,26 @@ func (s *AuthService) ensureUsernameAvailable(ctx context.Context, username stri
 		return fmt.Errorf("auth: failed to check username availability: %w", err)
 	}
 	return nil
+}
+
+func (s *AuthService) CheckSignupUsernameAvailability(
+	ctx context.Context,
+	username string,
+) (bool, error) {
+	username = strings.ToLower(strings.TrimSpace(username))
+	if len(username) < 3 || len(username) > 30 || !profileUsernamePattern.MatchString(username) {
+		return false, ErrInvalidUsername
+	}
+
+	_, err := s.users.GetUserByUsername(ctx, username)
+	if err == nil {
+		return false, nil
+	}
+	if errors.Is(err, repository.ErrNotFound) {
+		return true, nil
+	}
+
+	return false, fmt.Errorf("auth: failed to check username availability: %w", err)
 }
 
 func generateVerificationCode() (string, error) {

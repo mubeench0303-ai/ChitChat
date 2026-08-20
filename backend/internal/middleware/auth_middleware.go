@@ -25,6 +25,22 @@ func NewAuthMiddleware(jwt *jwthelper.Helper) *AuthMiddleware {
 	return &AuthMiddleware{jwt: jwt}
 }
 
+func (m *AuthMiddleware) OptionalAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cookie, err := r.Cookie(AuthTokenCookieName)
+		if err == nil {
+			claims, err := m.jwt.ValidateToken(cookie.Value)
+			if err == nil {
+				ctx := context.WithValue(r.Context(), userIDKey, claims.UserID)
+				ctx = context.WithValue(ctx, userEmailKey, claims.Email)
+				r = r.WithContext(ctx)
+			}
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (m *AuthMiddleware) RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie(AuthTokenCookieName)

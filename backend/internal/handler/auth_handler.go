@@ -64,6 +64,11 @@ type ResetPasswordRequest struct {
 	NewPassword string `json:"new_password" validate:"required,min=8"`
 }
 
+type VerifyResetCodeRequest struct {
+	Email string `json:"email" validate:"required,email"`
+	Code  string `json:"code" validate:"required,len=6"`
+}
+
 func (h *AuthHandler) authCookie(value string, maxAge int) *http.Cookie {
 	cookie := &http.Cookie{
 		Name:     middleware.AuthTokenCookieName,
@@ -321,6 +326,36 @@ func (h *AuthHandler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]string{
 		"message": "If the email exists, a password reset code has been sent.",
+	})
+}
+
+func (h *AuthHandler) VerifyResetCode(w http.ResponseWriter, r *http.Request) {
+	var req VerifyResetCodeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if err := h.validator.Struct(req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"message": "Validation failed",
+			"errors":  validationErrors(err),
+		})
+		return
+	}
+
+	err := h.auth.VerifyResetCode(r.Context(), req.Email, req.Code)
+	if errors.Is(err, service.ErrInvalidVerificationCode) || errors.Is(err, service.ErrExpiredVerificationCode) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Internal server error.")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"message": "Reset code verified.",
 	})
 }
 
