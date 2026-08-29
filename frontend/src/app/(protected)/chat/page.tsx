@@ -1,8 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
-import { BellOff, Loader2, MoreVertical, Pin, Search, Sparkles, Trash2, Users, UserRoundPlus } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { BellOff, Loader2, MoreVertical, Pin, Search, Sparkles, Trash2, Users, UserRoundPlus, X } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -51,7 +51,12 @@ import { getApiErrorStatus } from "@/lib/api/errors";
 import { subscribe } from "@/lib/ws/socket";
 import { useAuthStore } from "@/store/auth-store";
 import { useChatListStore } from "@/store/chat-list-store";
-import type { ChatConversation, NewMessageEventPayload, PresenceEventPayload } from "@/types";
+import type {
+  ChatConversation,
+  NewMessageEventPayload,
+  PresenceEventPayload,
+  TypingEventPayload,
+} from "@/types";
 import { cn } from "@/lib/utils";
 
 type ConfirmAction = "remove" | "block" | "clear";
@@ -227,13 +232,21 @@ function ChatRowSkeleton() {
 function ChatListHeader({
   searchQuery,
   activeFilter,
+  filterCounts,
+  stats,
+  searchInputRef,
   onSearchChange,
+  onClearSearch,
   onFilterChange,
   onNewGroup,
 }: {
   searchQuery: string;
   activeFilter: ChatFilter;
+  filterCounts: Record<ChatFilter, number>;
+  stats: { online: number; unread: number; groups: number };
+  searchInputRef: React.RefObject<HTMLInputElement | null>;
   onSearchChange: (value: string) => void;
+  onClearSearch: () => void;
   onFilterChange: (filter: ChatFilter) => void;
   onNewGroup: () => void;
 }) {
@@ -241,41 +254,78 @@ function ChatListHeader({
     <header className="mb-4 space-y-3 sm:mb-6 sm:space-y-4">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
-          <span className="hidden items-center gap-1.5 text-[10px] font-bold uppercase tracking-[1.2px] sm:flex">
-            <i
-              className={cn(
-                "block h-0.5 w-[18px] rounded-full",
-                signupGradientBgClass
-              )}
-            />
-            <span className={signupGradientTextClass}>Messages</span>
-          </span>
-          <h1 className="text-xl font-semibold leading-tight tracking-[-0.04em] text-text-primary sm:mt-2.5 sm:text-[clamp(1.75rem,5vw,2.25rem)]">
+          <div className="mb-2 flex items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-success/30 bg-success/10 px-2.5 py-0.5 font-mono text-[10.5px] font-bold uppercase tracking-wider text-success">
+              <span className="size-1.5 animate-dot-pulse rounded-full bg-success" />
+              live sync
+            </span>
+            <span className="hidden items-center gap-1.5 text-[10px] font-bold uppercase tracking-[1.2px] sm:flex">
+              <i
+                className={cn(
+                  "block h-0.5 w-[14px] rounded-full",
+                  signupGradientBgClass
+                )}
+              />
+              <span className={signupGradientTextClass}>Messages</span>
+            </span>
+          </div>
+
+          <h1 className="text-xl font-semibold leading-tight tracking-[-0.04em] text-text-primary sm:text-[clamp(1.75rem,5vw,2.25rem)]">
             Chats
           </h1>
           <p className="mt-1 hidden text-[13px] leading-relaxed text-text-secondary sm:block">
-            Your conversations in one place
+            Your conversations in one place — synced live.
           </p>
+
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <div className="inline-flex items-center gap-1.5 rounded-lg border border-border/70 bg-surface-1/60 px-2.5 py-1 text-[11.5px] font-medium text-text-secondary transition-all hover:border-border hover:bg-surface-1">
+              <span className="size-1.5 animate-dot-pulse rounded-full bg-success" />
+              <b className="font-semibold text-text-primary">{stats.online}</b> online
+            </div>
+            <div className="inline-flex items-center gap-1.5 rounded-lg border border-border/70 bg-surface-1/60 px-2.5 py-1 text-[11.5px] font-medium text-text-secondary transition-all hover:border-border hover:bg-surface-1">
+              <span className={cn("size-1.5 rounded-full", stats.unread > 0 ? "bg-accent animate-badge-pop" : "bg-text-muted")} />
+              <b className={cn("font-semibold", stats.unread > 0 ? "text-accent" : "text-text-primary")}>{stats.unread}</b> unread
+            </div>
+            <div className="inline-flex items-center gap-1.5 rounded-lg border border-border/70 bg-surface-1/60 px-2.5 py-1 text-[11.5px] font-medium text-text-secondary transition-all hover:border-border hover:bg-surface-1">
+              <Users className="size-3 text-text-muted" strokeWidth={2} />
+              <b className="font-semibold text-text-primary">{stats.groups}</b> groups
+            </div>
+          </div>
         </div>
 
         <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center lg:w-auto lg:max-w-md">
-          <div className="relative min-w-0 flex-1">
+          <div className="group/search relative min-w-0 flex-1">
             <Search
-              className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-text-muted"
+              className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-text-muted transition-colors group-focus-within/search:text-accent"
               strokeWidth={2}
             />
             <Input
+              ref={searchInputRef}
               value={searchQuery}
               onChange={(event) => onSearchChange(event.target.value)}
               placeholder="Search chats..."
               autoComplete="off"
-              className="h-9 border-border/70 bg-surface-1/50 pl-9"
+              className="h-9 border-border/70 bg-surface-1/50 pl-9 pr-10 transition-all focus:animate-search-pulse focus:border-accent/40"
             />
+            {searchQuery ? (
+              <button
+                type="button"
+                onClick={onClearSearch}
+                className="absolute top-1/2 right-2.5 flex size-5 -translate-y-1/2 items-center justify-center rounded-md bg-surface-2 text-text-muted transition-all hover:bg-surface-hover hover:text-text-primary"
+                aria-label="Clear search"
+              >
+                <X className="size-3" strokeWidth={2.5} />
+              </button>
+            ) : (
+              <kbd className="pointer-events-none absolute top-1/2 right-2.5 hidden -translate-y-1/2 items-center rounded border border-border/80 bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] text-text-muted sm:inline-flex">
+                /
+              </kbd>
+            )}
           </div>
           <Button
             type="button"
             size="sm"
-            className="h-9 shrink-0 gap-2 bg-accent text-white hover:bg-accent-hover"
+            className="h-9 shrink-0 gap-2 bg-accent text-white shadow-xs transition-all hover:-translate-y-0.5 hover:bg-accent-hover hover:shadow-sm active:translate-y-0 active:scale-[0.98]"
             onClick={onNewGroup}
           >
             <UserRoundPlus className="size-4" strokeWidth={2} />
@@ -291,6 +341,8 @@ function ChatListHeader({
       >
         {FILTER_OPTIONS.map((option) => {
           const isActive = activeFilter === option.id;
+          const count = filterCounts[option.id] ?? 0;
+          const isHot = option.id === "unread" && count > 0;
 
           return (
             <button
@@ -300,13 +352,25 @@ function ChatListHeader({
               aria-selected={isActive}
               onClick={() => onFilterChange(option.id)}
               className={cn(
-                "rounded-lg px-3 py-1.5 text-[13px] font-semibold transition-ui",
+                "group flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-semibold transition-all duration-200 active:scale-95",
                 isActive
-                  ? "bg-accent-subtle text-accent shadow-sm"
+                  ? "bg-accent-subtle text-accent shadow-xs"
                   : "text-text-secondary hover:bg-surface-hover hover:text-text-primary"
               )}
             >
-              {option.label}
+              <span>{option.label}</span>
+              <span
+                className={cn(
+                  "inline-flex min-w-4 items-center justify-center rounded-full px-1.5 py-0.5 font-mono text-[10px] font-bold leading-none transition-all",
+                  isActive
+                    ? "bg-accent text-white"
+                    : isHot
+                    ? "bg-accent/20 text-accent animate-badge-pop"
+                    : "bg-surface-2 text-text-muted group-hover:bg-surface-hover group-hover:text-text-secondary"
+                )}
+              >
+                {count}
+              </span>
             </button>
           );
         })}
@@ -319,6 +383,10 @@ function ChatRow({
   conversation,
   rowError,
   isActionLoading,
+  isFlashing,
+  isTyping = false,
+  typingSenderName = null,
+  index = 0,
   onOpen,
   onViewProfile,
   onRemove,
@@ -330,6 +398,10 @@ function ChatRow({
   conversation: ChatConversation;
   rowError: string | null;
   isActionLoading: boolean;
+  isFlashing?: boolean;
+  isTyping?: boolean;
+  typingSenderName?: string | null;
+  index?: number;
   onOpen: () => void;
   onViewProfile: () => void;
   onRemove: () => void;
@@ -350,7 +422,14 @@ function ChatRow({
   const hasUnread = unreadCount > 0;
 
   return (
-    <div className="rounded-[13px] border border-border/70 bg-surface-1/50 transition-ui hover:bg-surface-1/80">
+    <div
+      style={{ animationDelay: `${index * 0.04}s` }}
+      className={cn(
+        "group/row animate-row-in rounded-[13px] border border-border/70 bg-surface-1/50 transition-all duration-200 hover:-translate-y-0.5 hover:border-border hover:bg-surface-1/80 hover:shadow-sm active:translate-y-0 active:scale-[0.99]",
+        isFlashing && "animate-flash-row",
+        hasUnread && "border-border"
+      )}
+    >
       <div className="flex items-center gap-3 px-3.5 py-3.5">
         <button
           type="button"
@@ -358,7 +437,7 @@ function ChatRow({
           className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 text-left transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
         >
           <div className="relative shrink-0">
-            <Avatar className="size-12">
+            <Avatar className="size-12 transition-transform duration-300 group-hover/row:scale-105 group-hover/row:-rotate-2">
               {displayAvatarUrl ? (
                 <AvatarImage src={displayAvatarUrl} alt={displayName} />
               ) : null}
@@ -370,23 +449,30 @@ function ChatRow({
               >
                 {isGroup ? (
                   <Users className="size-5" strokeWidth={2} />
+                ) : isSystemParticipant ? (
+                  <span className="text-sm font-bold animate-spin-slow select-none">✦</span>
                 ) : (
                   getInitials(displayName)
                 )}
               </AvatarFallback>
             </Avatar>
-            {!isGroup && conversation.requesterIsOnline === true ? <OnlineDot /> : null}
+            {!isGroup && (conversation.requesterIsOnline === true || isSystemParticipant) ? (
+              <span className="absolute right-0 bottom-0 size-2.5 animate-dot-pulse rounded-full border-2 border-surface-1 bg-success" />
+            ) : null}
           </div>
 
           <div className="min-w-0 flex-1">
-            <p className="flex items-center gap-1 truncate text-sm font-semibold text-text-primary">
+            <p className="flex items-center gap-1.5 truncate text-sm font-semibold text-text-primary transition-colors group-hover/row:text-accent">
               <span className="truncate">{displayName}</span>
               {isSystemParticipant ? (
-                <Sparkles
-                  className="size-3.5 shrink-0 text-accent"
-                  strokeWidth={2}
-                  aria-label="AI Assistant"
-                />
+                <span className="inline-flex items-center gap-1 rounded-full border border-accent/25 bg-accent-subtle px-1.5 py-0.5 font-mono text-[9.5px] font-bold text-accent shadow-xs">
+                  <Sparkles
+                    className="size-3 shrink-0 text-accent animate-spin-slow"
+                    strokeWidth={2.2}
+                    aria-label="AI Assistant"
+                  />
+                  AI
+                </span>
               ) : null}
             </p>
             <p
@@ -397,7 +483,15 @@ function ChatRow({
                   : "font-normal text-text-secondary"
               )}
             >
-              {truncatePreview(conversation.latestMessageContent)}
+              {isTyping ? (
+                <span className="typing-dots" aria-label="Typing">
+                  <i />
+                  <i />
+                  <i />
+                </span>
+              ) : (
+                truncatePreview(conversation.latestMessageContent)
+              )}
             </p>
           </div>
 
@@ -417,13 +511,13 @@ function ChatRow({
                   aria-label="Pinned chat"
                 />
               ) : null}
-              <span className="text-[11px] font-medium text-text-muted">
+              <span className="font-mono text-[11px] font-medium text-text-muted">
                 {formatRelativeTime(conversation.latestMessageAt)}
               </span>
             </div>
             {hasUnread ? (
               <span
-                className="inline-flex min-h-5 min-w-5 items-center justify-center rounded-full bg-accent px-1.5 text-[10px] font-bold leading-none text-white"
+                className="inline-flex min-h-5 min-w-5 animate-badge-pop items-center justify-center rounded-full bg-accent px-1.5 text-[10px] font-bold leading-none text-white shadow-xs"
                 aria-label={`${unreadCount} unread message${unreadCount === 1 ? "" : "s"}`}
               >
                 {formatUnreadBadgeCount(unreadCount)}
@@ -440,7 +534,7 @@ function ChatRow({
               <Button
                 variant="ghost"
                 size="icon-sm"
-                className="shrink-0 self-center"
+                className="shrink-0 self-center cursor-pointer transition-transform active:scale-90"
                 disabled={isActionLoading}
                 aria-label="Conversation options"
               />
@@ -452,44 +546,47 @@ function ChatRow({
               <MoreVertical className="size-4" strokeWidth={2} />
             )}
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="min-w-44">
+          <DropdownMenuContent align="end" className="min-w-48 shadow-lg">
             {!isGroup ? (
               <>
-                <DropdownMenuItem onClick={onViewProfile}>
-                  View Profile
+                <DropdownMenuItem onClick={onViewProfile} className="cursor-pointer gap-2.5">
+                  <span className="flex size-5 shrink-0 items-center justify-center text-sm">👤</span>
+                  <span>View Profile</span>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
               </>
             ) : null}
-            <DropdownMenuItem onClick={onTogglePin}>
-              <Pin className="size-4" strokeWidth={2} />
-              {isPinned ? "Unpin Chat" : "Pin Chat"}
+            <DropdownMenuItem onClick={onTogglePin} className="cursor-pointer gap-2.5">
+              <span className="flex size-5 shrink-0 items-center justify-center text-sm">📌</span>
+              <span>{isPinned ? "Unpin Chat" : "Pin Chat"}</span>
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={onToggleMute}>
-              <BellOff className="size-4" strokeWidth={2} />
-              {isMuted ? "Unmute Notifications" : "Mute Notifications"}
+            <DropdownMenuItem onClick={onToggleMute} className="cursor-pointer gap-2.5">
+              <span className="flex size-5 shrink-0 items-center justify-center text-sm">{isMuted ? "🔔" : "🔕"}</span>
+              <span>{isMuted ? "Unmute Notifications" : "Mute Notifications"}</span>
             </DropdownMenuItem>
             {!isGroup && !isSystemParticipant ? (
               <>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={onClear}>
-                  <Trash2 className="size-4" strokeWidth={2} />
-                  Delete All Chat
+                <DropdownMenuItem onClick={onClear} className="cursor-pointer gap-2.5">
+                  <span className="flex size-5 shrink-0 items-center justify-center text-sm">🗑️</span>
+                  <span>Delete All Chat</span>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={onRemove}>
-                  Remove Connection
+                <DropdownMenuItem onClick={onRemove} className="cursor-pointer gap-2.5">
+                  <span className="flex size-5 shrink-0 items-center justify-center text-sm">👋</span>
+                  <span>Remove Connection</span>
                 </DropdownMenuItem>
-                <DropdownMenuItem variant="destructive" onClick={onBlock}>
-                  Block User
+                <DropdownMenuItem variant="destructive" onClick={onBlock} className="cursor-pointer gap-2.5">
+                  <span className="flex size-5 shrink-0 items-center justify-center text-sm">🚫</span>
+                  <span>Block User</span>
                 </DropdownMenuItem>
               </>
             ) : !isGroup ? (
               <>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={onClear}>
-                  <Trash2 className="size-4" strokeWidth={2} />
-                  Delete All Chat
+                <DropdownMenuItem onClick={onClear} className="cursor-pointer gap-2.5">
+                  <span className="flex size-5 shrink-0 items-center justify-center text-sm">🗑️</span>
+                  <span>Delete All Chat</span>
                 </DropdownMenuItem>
               </>
             ) : null}
@@ -529,8 +626,52 @@ export default function ChatPage() {
   const [sentRequests, setSentRequests] = useState<ChatConversation[]>([]);
   const [isSentRequestsLoading, setIsSentRequestsLoading] = useState(false);
   const [sentRequestsError, setSentRequestsError] = useState<string | null>(null);
+  const [flashId, setFlashId] = useState<string | null>(null);
+  const [typingMap, setTypingMap] = useState<
+    Record<string, { isTyping: boolean; senderName?: string }>
+  >({});
+  const typingHideTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const isPendingFilter = activeFilter === "pending";
+
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      const activeTag = document.activeElement?.tagName || "";
+      const isTyping = ["INPUT", "TEXTAREA"].includes(activeTag);
+      if (isTyping) return;
+
+      if (e.key === "/") {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  const stats = useMemo(() => {
+    const online = conversations.filter(
+      (c) => c.type === "direct" && c.requesterIsOnline
+    ).length;
+    const unread = conversations.reduce(
+      (acc, c) => acc + (c.unreadCount ?? 0),
+      0
+    );
+    const groups = conversations.filter((c) => c.type === "group").length;
+    return { online, unread, groups };
+  }, [conversations]);
+
+  const filterCounts = useMemo<Record<ChatFilter, number>>(() => {
+    return {
+      all: conversations.length,
+      unread: conversations.filter((c) => (c.unreadCount ?? 0) > 0).length,
+      groups: conversations.filter((c) => c.type === "group").length,
+      direct: conversations.filter((c) => c.type === "direct").length,
+      pending: sentRequests.length,
+    };
+  }, [conversations, sentRequests]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -577,6 +718,7 @@ export default function ChatPage() {
   const hasActiveFilters =
     (activeFilter !== "all" && activeFilter !== "pending") ||
     debouncedSearchQuery.trim().length > 0;
+
   useEffect(() => {
     let cancelled = false;
 
@@ -662,6 +804,16 @@ export default function ChatPage() {
     const unsubscribe = subscribe("new_message", (payload) => {
       const event = payload as NewMessageEventPayload;
 
+      setFlashId(event.conversationId);
+      setTimeout(() => {
+        setFlashId((curr) => (curr === event.conversationId ? null : curr));
+      }, 1800);
+
+      setTypingMap((prev) => ({
+        ...prev,
+        [event.conversationId]: { isTyping: false },
+      }));
+
       setConversations((current) => {
         const index = current.findIndex(
           (item) => item.conversationId === event.conversationId
@@ -697,6 +849,50 @@ export default function ChatPage() {
 
     return unsubscribe;
   }, [currentUser?.id, setStoreConversations]);
+
+  useEffect(() => {
+    const unsubscribe = subscribe("typing", (payload) => {
+      const event = payload as TypingEventPayload;
+      if (!event.conversationId) return;
+      if (event.userId === currentUser?.id) return;
+
+      if (typingHideTimersRef.current[event.conversationId]) {
+        clearTimeout(typingHideTimersRef.current[event.conversationId]);
+        delete typingHideTimersRef.current[event.conversationId];
+      }
+
+      if (event.isTyping) {
+        setTypingMap((prev) => ({
+          ...prev,
+          [event.conversationId]: {
+            isTyping: true,
+            senderName: event.senderName?.trim(),
+          },
+        }));
+
+        typingHideTimersRef.current[event.conversationId] = setTimeout(() => {
+          setTypingMap((prev) => ({
+            ...prev,
+            [event.conversationId]: { isTyping: false },
+          }));
+          delete typingHideTimersRef.current[event.conversationId];
+        }, 5000);
+      } else {
+        setTypingMap((prev) => ({
+          ...prev,
+          [event.conversationId]: { isTyping: false },
+        }));
+      }
+    });
+
+    return () => {
+      unsubscribe();
+      Object.values(typingHideTimersRef.current).forEach((timer) =>
+        clearTimeout(timer)
+      );
+      typingHideTimersRef.current = {};
+    };
+  }, [currentUser?.id]);
 
   useEffect(() => {
     const unsubscribe = subscribe("presence", (payload) => {
@@ -863,7 +1059,11 @@ export default function ChatPage() {
         <ChatListHeader
           searchQuery={searchQuery}
           activeFilter={activeFilter}
+          filterCounts={filterCounts}
+          stats={stats}
+          searchInputRef={searchInputRef}
           onSearchChange={setSearchQuery}
+          onClearSearch={() => setSearchQuery("")}
           onFilterChange={setActiveFilter}
           onNewGroup={() => setIsCreateGroupOpen(true)}
         />
@@ -886,9 +1086,10 @@ export default function ChatPage() {
               ) : null}
 
               {!isSentRequestsLoading && filteredSentRequests.length > 0
-                ? filteredSentRequests.map((conversation) => (
+                ? filteredSentRequests.map((conversation, index) => (
                     <ConversationPreviewRow
                       key={conversation.conversationId}
+                      index={index}
                       conversation={{
                         conversationId: conversation.conversationId,
                         displayName: getConversationDisplayName(conversation),
@@ -909,7 +1110,8 @@ export default function ChatPage() {
               {!isSentRequestsLoading &&
               !sentRequestsError &&
               sentRequests.length === 0 ? (
-                <div className="rounded-[13px] border border-dashed border-border/70 bg-surface-1/30 px-3.5 py-12 text-center">
+                <div className="animate-row-in rounded-[13px] border border-dashed border-border/70 bg-surface-1/30 px-3.5 py-12 text-center">
+                  <div className="animate-float-slow mb-3 text-3xl">📭</div>
                   <p className="text-sm font-medium text-text-secondary">
                     No pending requests sent
                   </p>
@@ -924,7 +1126,8 @@ export default function ChatPage() {
               sentRequests.length > 0 &&
               filteredSentRequests.length === 0 &&
               debouncedSearchQuery.trim().length > 0 ? (
-                <div className="rounded-[13px] border border-dashed border-border/70 bg-surface-1/30 px-3.5 py-12 text-center">
+                <div className="animate-row-in rounded-[13px] border border-dashed border-border/70 bg-surface-1/30 px-3.5 py-12 text-center">
+                  <div className="animate-float-slow mb-3 text-3xl">🔍</div>
                   <p className="text-sm font-medium text-text-secondary">
                     No pending requests match
                   </p>
@@ -936,84 +1139,90 @@ export default function ChatPage() {
             </>
           ) : (
             <>
-          {error ? (
-            <p className="rounded-[13px] border border-border/70 bg-surface-1/50 px-3.5 py-3 text-[13px] leading-relaxed text-accent">
-              {error}
-            </p>
-          ) : null}
+              {error ? (
+                <p className="rounded-[13px] border border-border/70 bg-surface-1/50 px-3.5 py-3 text-[13px] leading-relaxed text-accent">
+                  {error}
+                </p>
+              ) : null}
 
-          {isLoading ? (
-            <>
-              <ChatRowSkeleton />
-              <ChatRowSkeleton />
-              <ChatRowSkeleton />
-            </>
-          ) : null}
+              {isLoading ? (
+                <>
+                  <ChatRowSkeleton />
+                  <ChatRowSkeleton />
+                  <ChatRowSkeleton />
+                </>
+              ) : null}
 
-          {!isLoading && filteredConversations.length > 0
-            ? filteredConversations.map((conversation) => (
-                <ChatRow
-                  key={conversation.conversationId}
-                  conversation={conversation}
-                  rowError={rowErrors[conversation.conversationId] ?? null}
-                  isActionLoading={pendingActions[conversation.conversationId] ?? false}
-                  onOpen={() =>
-                    router.push(
-                      `/chat/${encodeURIComponent(conversation.conversationId)}`
-                    )
-                  }
-                  onViewProfile={() => {
-                    if (
-                      conversation.type !== "direct" ||
-                      !conversation.requesterUsername
-                    ) {
-                      return;
-                    }
+              {!isLoading && filteredConversations.length > 0
+                ? filteredConversations.map((conversation, index) => (
+                    <ChatRow
+                      key={conversation.conversationId}
+                      index={index}
+                      isFlashing={conversation.conversationId === flashId}
+                      isTyping={typingMap[conversation.conversationId]?.isTyping ?? false}
+                      typingSenderName={typingMap[conversation.conversationId]?.senderName ?? null}
+                      conversation={conversation}
+                      rowError={rowErrors[conversation.conversationId] ?? null}
+                      isActionLoading={pendingActions[conversation.conversationId] ?? false}
+                      onOpen={() =>
+                        router.push(
+                          `/chat/${encodeURIComponent(conversation.conversationId)}`
+                        )
+                      }
+                      onViewProfile={() => {
+                        if (
+                          conversation.type !== "direct" ||
+                          !conversation.requesterUsername
+                        ) {
+                          return;
+                        }
 
-                    router.push(
-                      `/users/${encodeURIComponent(conversation.requesterUsername)}`
-                    );
-                  }}
-                  onRemove={() =>
-                    setConfirmAction({ type: "remove", conversation })
-                  }
-                  onBlock={() =>
-                    setConfirmAction({ type: "block", conversation })
-                  }
-                  onClear={() =>
-                    setConfirmAction({ type: "clear", conversation })
-                  }
-                  onTogglePin={() => void handleTogglePin(conversation)}
-                  onToggleMute={() => void handleToggleMute(conversation)}
-                />
-              ))
-            : null}
+                        router.push(
+                          `/users/${encodeURIComponent(conversation.requesterUsername)}`
+                        );
+                      }}
+                      onRemove={() =>
+                        setConfirmAction({ type: "remove", conversation })
+                      }
+                      onBlock={() =>
+                        setConfirmAction({ type: "block", conversation })
+                      }
+                      onClear={() =>
+                        setConfirmAction({ type: "clear", conversation })
+                      }
+                      onTogglePin={() => void handleTogglePin(conversation)}
+                      onToggleMute={() => void handleToggleMute(conversation)}
+                    />
+                  ))
+                : null}
 
-          {!isLoading && !error && conversations.length === 0 ? (
-            <div className="rounded-[13px] border border-dashed border-border/70 bg-surface-1/30 px-3.5 py-12 text-center">
-              <p className="text-sm font-medium text-text-secondary">
-                No conversations yet.
-              </p>
-              <p className="mt-1 text-[13px] text-text-muted">
-                Accepted message requests will appear here.
-              </p>
-            </div>
-          ) : null}
+              {!isLoading && !error && conversations.length === 0 ? (
+                <div className="animate-row-in rounded-[13px] border border-dashed border-border/70 bg-surface-1/30 px-3.5 py-12 text-center">
+                  <div className="animate-float-slow mb-3 text-3xl">💬</div>
+                  <p className="text-sm font-medium text-text-secondary">
+                    No conversations yet.
+                  </p>
+                  <p className="mt-1 text-[13px] text-text-muted">
+                    Accepted message requests will appear here.
+                  </p>
+                </div>
+              ) : null}
 
-          {!isLoading &&
-          !error &&
-          conversations.length > 0 &&
-          filteredConversations.length === 0 &&
-          hasActiveFilters ? (
-            <div className="rounded-[13px] border border-dashed border-border/70 bg-surface-1/30 px-3.5 py-12 text-center">
-              <p className="text-sm font-medium text-text-secondary">
-                No chats match
-              </p>
-              <p className="mt-1 text-[13px] text-text-muted">
-                Try a different search term or filter.
-              </p>
-            </div>
-          ) : null}
+              {!isLoading &&
+              !error &&
+              conversations.length > 0 &&
+              filteredConversations.length === 0 &&
+              hasActiveFilters ? (
+                <div className="animate-row-in rounded-[13px] border border-dashed border-border/70 bg-surface-1/30 px-3.5 py-12 text-center">
+                  <div className="animate-float-slow mb-3 text-3xl">🔍</div>
+                  <p className="text-sm font-medium text-text-secondary">
+                    No chats match
+                  </p>
+                  <p className="mt-1 text-[13px] text-text-muted">
+                    Try a different search term or filter.
+                  </p>
+                </div>
+              ) : null}
             </>
           )}
         </div>

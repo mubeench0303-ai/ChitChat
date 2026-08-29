@@ -74,15 +74,18 @@ export function ConversationPreviewRow({
   conversation,
   onOpen,
   className,
+  index = 0,
 }: {
   conversation: ConversationPreviewRowData;
   onOpen: () => void;
   className?: string;
+  index?: number;
 }) {
   return (
     <div
+      style={{ animationDelay: `${index * 0.04}s` }}
       className={cn(
-        "rounded-[13px] border border-border/70 bg-surface-1/50 transition-ui hover:bg-surface-1/80",
+        "group/row animate-row-in rounded-[13px] border border-border/70 bg-surface-1/50 transition-all duration-200 hover:-translate-y-0.5 hover:border-border hover:bg-surface-1/80 hover:shadow-sm active:translate-y-0 active:scale-[0.99]",
         className
       )}
     >
@@ -92,7 +95,7 @@ export function ConversationPreviewRow({
         className="flex w-full items-center gap-3 px-3.5 py-3.5 text-left"
       >
         <div className="relative shrink-0">
-          <Avatar className="size-11">
+          <Avatar className="size-11 transition-transform duration-300 group-hover/row:scale-105 group-hover/row:-rotate-2">
             {conversation.avatarUrl ? (
               <AvatarImage
                 src={conversation.avatarUrl}
@@ -109,16 +112,16 @@ export function ConversationPreviewRow({
             </AvatarFallback>
           </Avatar>
           {conversation.isOnline ? (
-            <span className="absolute right-0 bottom-0 size-2.5 rounded-full border-2 border-surface-1 bg-green-500" />
+            <span className="absolute right-0 bottom-0 size-2.5 animate-dot-pulse rounded-full border-2 border-surface-1 bg-success" />
           ) : null}
         </div>
 
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline justify-between gap-2">
-            <p className="truncate text-sm font-semibold text-text-primary">
+            <p className="truncate text-sm font-semibold text-text-primary transition-colors group-hover/row:text-accent">
               {conversation.displayName}
             </p>
-            <span className="shrink-0 text-[11px] text-text-muted">
+            <span className="shrink-0 font-mono text-[11px] text-text-muted">
               {formatRelativeTime(conversation.latestMessageAt)}
             </span>
           </div>

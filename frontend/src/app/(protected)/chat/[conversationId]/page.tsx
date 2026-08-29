@@ -2618,23 +2618,28 @@ export default function ConversationPage() {
                     >
                       {isGroupChat && !headerAvatarUrl ? (
                         <Users className="size-4" strokeWidth={2} />
+                      ) : participantIsSystem ? (
+                        <span className="text-sm font-bold animate-spin-slow select-none">✦</span>
                       ) : (
                         headerInitials
                       )}
                     </AvatarFallback>
                   </Avatar>
-                  {!isGroupChat && participantIsOnline === true ? <OnlineDot /> : null}
+                  {!isGroupChat && (participantIsOnline === true || participantIsSystem) ? <OnlineDot /> : null}
                 </div>
 
                 <div className="min-w-0 flex-1 overflow-hidden">
-                  <p className="flex items-center gap-1 truncate text-sm font-semibold text-text-primary">
+                  <p className="flex items-center gap-1.5 truncate text-sm font-semibold text-text-primary">
                     <span className="truncate">{headerName}</span>
                     {participantIsSystem ? (
-                      <Sparkles
-                        className="size-3.5 shrink-0 text-accent"
-                        strokeWidth={2}
-                        aria-label="AI Assistant"
-                      />
+                      <span className="inline-flex items-center gap-1 rounded-full border border-accent/25 bg-accent-subtle px-1.5 py-0.5 font-mono text-[9.5px] font-bold text-accent shadow-xs">
+                        <Sparkles
+                          className="size-3 shrink-0 text-accent animate-spin-slow"
+                          strokeWidth={2.2}
+                          aria-label="AI Assistant"
+                        />
+                        AI
+                      </span>
                     ) : null}
                   </p>
                   {isGroupChat ? (
@@ -2670,9 +2675,14 @@ export default function ConversationPage() {
                         signupGradientBgClass
                       )}
                     >
-                      {headerInitials}
+                      {participantIsSystem ? (
+                        <span className="text-sm font-bold animate-spin-slow select-none">✦</span>
+                      ) : (
+                        headerInitials
+                      )}
                     </AvatarFallback>
                   </Avatar>
+                  {!isGroupChat && (participantIsOnline === true || participantIsSystem) ? <OnlineDot /> : null}
                 </div>
                 <div className="min-w-0 flex-1 overflow-hidden">
                   <p className="truncate text-sm font-semibold text-text-primary">
@@ -2805,12 +2815,21 @@ export default function ConversationPage() {
                   </div>
                 </>
               )}
-              {isOtherTyping ? (
-                <p className="px-1 pt-1 text-xs text-text-muted">
-                  {isGroupChat
-                    ? `${typingSenderName ?? "Someone"} is typing...`
-                    : `${headerName} is typing...`}
-                </p>
+              {isOtherTyping || isAiTyping ? (
+                <div className="flex items-center gap-2 px-1 pt-1.5 animate-row-in">
+                  <div className="flex items-center gap-1.5 rounded-2xl bg-surface-2/90 px-3 py-2 border border-border/70 shadow-xs">
+                    <span className="size-1.5 rounded-full bg-accent animate-tdot" />
+                    <span className="size-1.5 rounded-full bg-accent animate-tdot [animation-delay:0.15s]" />
+                    <span className="size-1.5 rounded-full bg-accent animate-tdot [animation-delay:0.3s]" />
+                  </div>
+                  <span className="text-xs font-medium text-text-muted">
+                    {isAiTyping
+                      ? "AI Assistant is thinking..."
+                      : isGroupChat
+                      ? `${typingSenderName ?? "Someone"} is typing...`
+                      : `${headerName} is typing...`}
+                  </span>
+                </div>
               ) : null}
               <div ref={messagesEndRef} />
             </div>

@@ -1,9 +1,11 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { usePathname } from "next/navigation";
 import { Menu } from "lucide-react";
 
+import { signupGradientBgClass } from "@/components/auth/signup-submit-button";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Button } from "@/components/ui/button";
 import {
@@ -11,6 +13,7 @@ import {
   SheetContent,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { cn } from "@/lib/utils";
 
 interface ProtectedAppShellProps {
   children: React.ReactNode;
@@ -33,7 +36,7 @@ export function ProtectedAppShell({ children }: ProtectedAppShellProps) {
 
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         {hideMobileHeader ? null : (
-          <header className="flex shrink-0 items-center gap-2 border-b border-border/70 bg-background px-3 py-2 lg:hidden">
+          <header className="flex shrink-0 items-center gap-2.5 border-b border-border/70 bg-background px-3 py-2 lg:hidden">
             <Button
               type="button"
               variant="secondary"
@@ -43,9 +46,23 @@ export function ProtectedAppShell({ children }: ProtectedAppShellProps) {
             >
               <Menu className="size-4" strokeWidth={2} />
             </Button>
-            <p className="truncate text-sm font-semibold text-text-primary">
-              ChitChat
-            </p>
+            <Link
+              href="/chat"
+              className="inline-flex items-center gap-2 font-semibold tracking-[-0.04em] text-text-primary no-underline"
+            >
+              <span
+                aria-hidden
+                className={cn(
+                  "grid size-6 place-items-center rounded-[8px] text-xs text-white shadow-[0_4px_16px_color-mix(in_srgb,var(--accent)_32%,transparent)] animate-spin-slow",
+                  signupGradientBgClass
+                )}
+              >
+                ✦
+              </span>
+              <span className="text-[16px] font-semibold tracking-[-0.04em] text-text-primary">
+                chitchat
+              </span>
+            </Link>
           </header>
         )}
 

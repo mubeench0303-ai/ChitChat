@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { CircleFadingPlus, Inbox, MessageSquare, Search, Settings, UserRound, UserRoundPlus } from "lucide-react";
+import { motion } from "framer-motion";
+import { CircleFadingPlus, Inbox, MessageSquare, Search, Settings, Sparkles, UserRound, UserRoundPlus } from "lucide-react";
 
 import { signupGradientBgClass } from "@/components/auth/signup-submit-button";
 import { CreateGroupDialog } from "@/components/chat/create-group-dialog";
@@ -12,13 +13,15 @@ import {
   AvatarFallback,
   AvatarImage,
 } from "@/components/ui/avatar";
-import { getIncomingRequests } from "@/lib/api/auth";
+import { getChatList, getIncomingRequests } from "@/lib/api/auth";
 import { subscribe } from "@/lib/ws/socket";
 import { useAuthStore } from "@/store/auth-store";
+import { useChatListStore } from "@/store/chat-list-store";
 import { cn } from "@/lib/utils";
 
 type NavItemId =
   | "chats"
+  | "assistant"
   | "friends"
   | "status"
   | "requests"
@@ -40,10 +43,21 @@ function getInitials(fullName: string) {
     .join("");
 }
 
-function isNavItemActive(id: NavItemId, pathname: string) {
+function isNavItemActive(
+  id: NavItemId,
+  pathname: string,
+  systemConversationId?: string
+) {
   switch (id) {
+    case "assistant":
+      return systemConversationId
+        ? pathname === `/chat/${systemConversationId}`
+        : false;
     case "chats":
-      return pathname === "/chat" || pathname.startsWith("/chat/");
+      return (
+        (pathname === "/chat" || pathname.startsWith("/chat/")) &&
+        (!systemConversationId || pathname !== `/chat/${systemConversationId}`)
+      );
     case "friends":
       return pathname === "/friends" || pathname.startsWith("/friends/");
     case "status":
@@ -74,31 +88,48 @@ function SidebarNavItem({
   badge?: number;
   onClick?: () => void;
 }) {
+  const isSettings = label === "Settings";
+  const isStatus = label === "Status";
+  const isAssistant = label === "AI Assistant";
+
   const className = cn(
-    "group relative flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-[13px] font-medium transition-ui sm:py-2.5",
+    "group relative flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-[13px] font-medium transition-all duration-200 sm:py-2.5",
     isActive
-      ? "bg-accent-subtle text-text-primary"
-      : "text-text-secondary hover:bg-surface-hover hover:text-text-primary"
+      ? "bg-accent-subtle text-text-primary shadow-xs"
+      : "text-text-secondary hover:bg-surface-hover hover:text-text-primary active:scale-[0.98]"
   );
 
   const content = (
     <>
       {isActive ? (
-        <span className="absolute inset-y-2 left-0 w-0.5 rounded-full bg-accent" />
+        <span className="absolute inset-y-2 left-0 w-1 rounded-r-full bg-accent shadow-[0_0_8px_var(--accent)] transition-all duration-300" />
       ) : null}
       <span
         className={cn(
-          "flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors",
+          "flex size-8 shrink-0 items-center justify-center rounded-lg transition-all duration-200",
           isActive
-            ? "bg-accent text-white"
-            : "bg-surface-2 text-text-secondary group-hover:text-text-primary"
+            ? "bg-accent text-white shadow-xs"
+            : "bg-surface-2 text-text-secondary group-hover:bg-surface-1 group-hover:text-text-primary"
         )}
       >
-        {icon}
+        <span
+          className={cn(
+            "flex items-center justify-center transition-transform duration-300",
+            isSettings
+              ? "group-hover:rotate-90 group-hover:scale-110"
+              : isStatus
+              ? "group-hover:scale-115 group-hover:rotate-6"
+              : isAssistant
+              ? "group-hover:scale-125 group-hover:rotate-12 duration-300"
+              : "group-hover:scale-115 group-hover:-rotate-3"
+          )}
+        >
+          {icon}
+        </span>
       </span>
-      <span className="min-w-0 flex-1 truncate">{label}</span>
+      <span className="min-w-0 flex-1 truncate transition-colors duration-150">{label}</span>
       {badge && badge > 0 ? (
-        <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-bold leading-none text-white">
+        <span className="inline-flex min-w-5 animate-badge-pop items-center justify-center rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-bold leading-none text-white shadow-xs">
           {badge > 99 ? "99+" : badge}
         </span>
       ) : null}
@@ -123,8 +154,39 @@ function SidebarNavItem({
 export function Sidebar({ onNavigate, className }: SidebarProps) {
   const pathname = usePathname();
   const user = useAuthStore((state) => state.user);
+  const conversations = useChatListStore((state) => state.conversations);
+  const setConversations = useChatListStore((state) => state.setConversations);
   const [pendingRequestCount, setPendingRequestCount] = useState(0);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
+  const [systemConvoId, setSystemConvoId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const found = conversations.find((c) => c.participantIsSystem === true);
+    if (found) {
+      setSystemConvoId(found.conversationId);
+      return;
+    }
+
+    let cancelled = false;
+    async function fetchList() {
+      try {
+        const list = await getChatList();
+        if (!cancelled) {
+          setConversations(list);
+          const ai = list.find((c) => c.participantIsSystem === true);
+          if (ai) {
+            setSystemConvoId(ai.conversationId);
+          }
+        }
+      } catch {
+        // silent
+      }
+    }
+    void fetchList();
+    return () => {
+      cancelled = true;
+    };
+  }, [conversations, setConversations]);
 
   useEffect(() => {
     let cancelled = false;
@@ -163,6 +225,10 @@ export function Sidebar({ onNavigate, className }: SidebarProps) {
     onNavigate?.();
   }
 
+  const assistantHref = systemConvoId
+    ? `/chat/${encodeURIComponent(systemConvoId)}`
+    : "/chat";
+
   return (
     <>
       <aside
@@ -172,24 +238,25 @@ export function Sidebar({ onNavigate, className }: SidebarProps) {
         )}
       >
         <div className="mb-4 shrink-0 px-1 sm:mb-5">
-          <div className="flex items-center gap-3">
-            <div
+          <Link
+            href="/chat"
+            className="inline-flex items-center gap-2.5 font-semibold tracking-[-0.04em] text-sidebar-foreground no-underline transition-opacity hover:opacity-90"
+          >
+            <motion.span
+              aria-hidden
               className={cn(
-                "grid size-10 shrink-0 place-items-center rounded-xl text-white shadow-sm",
+                "grid size-8 shrink-0 place-items-center rounded-[10px] text-sm text-white shadow-[0_8px_24px_color-mix(in_srgb,var(--accent)_32%,transparent)]",
                 signupGradientBgClass
               )}
+              animate={{ rotate: 360 }}
+              transition={{ duration: 14, repeat: Infinity, ease: "linear" }}
             >
-              <MessageSquare className="size-5" strokeWidth={2.25} />
-            </div>
-            <div className="min-w-0">
-              <p className="truncate text-base font-semibold tracking-[-0.02em] text-sidebar-foreground">
-                ChitChat
-              </p>
-              <p className="truncate text-[11px] font-medium text-text-muted">
-                Stay connected
-              </p>
-            </div>
-          </div>
+              ✦
+            </motion.span>
+            <span className="text-[19px] font-semibold tracking-[-0.04em] text-text-primary">
+              chitchat
+            </span>
+          </Link>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
@@ -198,7 +265,14 @@ export function Sidebar({ onNavigate, className }: SidebarProps) {
               icon={<MessageSquare className="size-4" strokeWidth={2} />}
               label="Chats"
               href="/chat"
-              isActive={isNavItemActive("chats", pathname)}
+              isActive={isNavItemActive("chats", pathname, systemConvoId ?? undefined)}
+              onClick={handleNavClick}
+            />
+            <SidebarNavItem
+              icon={<Sparkles className="size-4" strokeWidth={2} />}
+              label="AI Assistant"
+              href={assistantHref}
+              isActive={isNavItemActive("assistant", pathname, systemConvoId ?? undefined)}
               onClick={handleNavClick}
             />
             <SidebarNavItem
@@ -249,10 +323,10 @@ export function Sidebar({ onNavigate, className }: SidebarProps) {
           <Link
             href="/settings"
             onClick={handleNavClick}
-            className="flex items-center gap-3 rounded-[14px] border border-sidebar-border bg-surface-1 px-3 py-2.5 transition-ui hover:bg-surface-hover sm:py-3"
+            className="group flex items-center gap-3 rounded-[14px] border border-sidebar-border bg-surface-1 px-3 py-2.5 transition-all duration-200 hover:border-border hover:bg-surface-hover active:scale-[0.98] sm:py-3"
           >
             <div className="relative shrink-0">
-              <Avatar className="size-11">
+              <Avatar className="size-11 transition-transform duration-300 group-hover:scale-105 group-hover:rotate-2">
                 {user?.avatarUrl ? (
                   <AvatarImage src={user.avatarUrl} alt={user.fullName} />
                 ) : null}
@@ -266,11 +340,11 @@ export function Sidebar({ onNavigate, className }: SidebarProps) {
                 </AvatarFallback>
               </Avatar>
               {user?.isOnline ? (
-                <span className="absolute right-0 bottom-0 size-3 rounded-full border-2 border-surface-1 bg-success" />
+                <span className="absolute right-0 bottom-0 size-3 animate-dot-pulse rounded-full border-2 border-surface-1 bg-success" />
               ) : null}
             </div>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-semibold text-text-primary">
+              <p className="truncate text-sm font-semibold text-text-primary transition-colors group-hover:text-accent">
                 {user?.fullName ?? "Your account"}
               </p>
               <p className="truncate text-[12px] text-text-muted">
